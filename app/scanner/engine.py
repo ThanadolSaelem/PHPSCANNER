@@ -1,20 +1,22 @@
-"""Scan orchestration: discovery -> scope filter -> probe -> findings.
+"""Scan orchestration: liveness -> MAC/ports -> web probe -> assessment.
 
-The engine runs a single :class:`ScanJob` to completion, updating its progress
-in place so the API can stream it to the UI. It is cooperative-cancellable via
-an :class:`asyncio.Event`.
+Pipeline per authorized target range:
+  1. expand targets (capped by max_targets)
+  2. TCP-connect liveness sweep to find online hosts + latency
+  3. read the ARP table (now populated by the sweep) for MAC addresses
+  4. for each live host: port-scan web ports, probe PHP on any that answer,
+     assess php2shell, label the device, write a ThaiCERT assessment line
 """
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 from ..config import Settings
-from ..models import (HostResult, JobState, ScanJob, ServiceResult)
-from . import http_probe, port_scanner
-from .dns_resolver import ReverseResolver, match_suffix
-from .ip_utils import expand_targets
+from ..models import Device, JobState, ScanJob, Severity
+from . import discovery, http_probe, port_scanner, vuln_rules
+from .ip_utils import expand_targets, label_targets
 
 
 def _now() -> datetime:
@@ -30,85 +32,101 @@ class ScanEngine:
         job.started_at = _now()
         try:
             await self._run(job, cancel)
-            if cancel.is_set():
-                job.state = JobState.cancelled
-            else:
-                job.state = JobState.completed
-        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
+            job.state = JobState.cancelled if cancel.is_set() else JobState.completed
+        except Exception as exc:  # noqa: BLE001
             job.state = JobState.failed
             job.error = f"{type(exc).__name__}: {exc}"
         finally:
             job.finished_at = _now()
+            if job.started_at:
+                job.duration_s = round((job.finished_at - job.started_at).total_seconds(), 2)
 
     async def _run(self, job: ScanJob, cancel: asyncio.Event) -> None:
         req = job.request
-        suffixes = req.allowed_suffixes or self.settings.default_allowed_suffixes
-        concurrency = min(
-            req.concurrency or self.settings.max_concurrency,
-            self.settings.max_concurrency,
-        )
-        ports = req.ports or self.settings.web_ports
+        s = self.settings
+        concurrency = min(req.concurrency or s.max_concurrency, s.max_concurrency)
+        job.workers = concurrency
         delay = (req.polite_delay_ms if req.polite_delay_ms is not None
-                 else self.settings.polite_delay_ms) / 1000.0
+                 else s.polite_delay_ms) / 1000.0
+        job.target_label = label_targets(req.targets)
 
-        ips, total = expand_targets(req.targets, self.settings.max_targets)
+        ips, total = expand_targets(req.targets, s.max_targets)
         job.progress.total_ips = total
 
-        resolver = ReverseResolver(self.settings.dns_servers, self.settings.dns_timeout)
+        live_ports = list(dict.fromkeys(s.web_ports + s.liveness_ports))
 
-        # --- Phase 1: reverse DNS + scope filter -------------------------
-        dns_sem = asyncio.Semaphore(concurrency)
-        in_scope: List[HostResult] = []
+        # --- Phase 1: liveness + latency -------------------------------
+        sem = asyncio.Semaphore(concurrency)
+        live: List[tuple[str, int | None]] = []
 
-        async def resolve_one(ip: str) -> None:
+        async def liveness(ip: str) -> None:
             if cancel.is_set():
                 return
-            async with dns_sem:
-                hostname = await resolver.reverse(ip)
-            job.progress.resolved += 1
-            matched = match_suffix(hostname, suffixes)
-            if matched:
-                host = HostResult(ip=ip, hostname=hostname, in_scope=True,
-                                  matched_suffix=matched)
-                in_scope.append(host)
-                job.progress.in_scope += 1
+            async with sem:
+                up, latency = await discovery.alive_latency(ip, live_ports, s.connect_timeout)
+            job.progress.probed += 1
+            if up:
+                live.append((ip, latency))
+                job.progress.online += 1
 
-        await asyncio.gather(*(resolve_one(ip) for ip in ips))
+        await asyncio.gather(*(liveness(ip) for ip in ips))
         if cancel.is_set():
-            job.hosts = in_scope
             return
 
-        # --- Phase 2: probe in-scope hosts -------------------------------
-        probe_sem = asyncio.Semaphore(concurrency)
-        async with http_probe.build_client(
-            self.settings.http_timeout, self.settings.connect_timeout
-        ) as client:
+        arp = discovery.read_arp_table()
 
-            async def probe_host(host: HostResult) -> None:
+        # --- Phase 2: web probe + assessment ---------------------------
+        probe_sem = asyncio.Semaphore(concurrency)
+        devices: List[Device] = []
+        async with http_probe.build_client(s.http_timeout, s.connect_timeout) as client:
+
+            async def inspect(ip: str, latency: int | None) -> None:
                 if cancel.is_set():
                     return
                 async with probe_sem:
-                    found = await port_scanner.open_ports(
-                        host.ip, ports, self.settings.connect_timeout
-                    )
-                    services: List[ServiceResult] = []
-                    for port in found:
-                        svc = await http_probe.probe_service(
-                            client, host.ip, port, host.hostname
-                        )
-                        if svc is not None:
-                            services.append(svc)
-                            job.progress.findings += len(svc.findings)
+                    open_all = await port_scanner.open_ports(ip, live_ports, s.connect_timeout)
+                    web_open = [p for p in open_all if p in s.web_ports]
+                    other_open = [p for p in open_all if p not in s.web_ports]
+
+                    findings = []
+                    php_version = server = cms = None
+                    has_tls = any(p in (443, 8443) for p in web_open)
+                    seen_rules: set[str] = set()
+                    for port in web_open:
+                        wr = await http_probe.probe_service(client, ip, port)
+                        if wr is None:
+                            continue
+                        php_version = php_version or wr.php_version
+                        server = server or wr.server
+                        cms = cms or wr.cms
+                        for f in wr.findings:
+                            if f.rule_id not in seen_rules:
+                                seen_rules.add(f.rule_id)
+                                findings.append(f)
                     if delay:
                         await asyncio.sleep(delay)
-                host.services = services
-                host.recompute_severity()
-                job.progress.probed += 1
 
-            await asyncio.gather(*(probe_host(h) for h in in_scope))
+                has_web = bool(web_open)
+                severity = vuln_rules.device_severity(findings) if has_web else Severity.safe
+                service = ("HTTPS" if has_tls else "HTTP") if has_web else "ไม่มีบริการเว็บ"
+                device = Device(
+                    ip=ip, up=True, mac=arp.get(ip),
+                    device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
+                    service=service, php_version=php_version, server=server, cms=cms,
+                    open_ports=sorted(web_open), latency_ms=latency, severity=severity,
+                    assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
+                    findings=findings,
+                )
+                devices.append(device)
+                if severity != Severity.safe:
+                    job.progress.risks += 1
 
-        # Keep hosts sorted by severity so the worst are first in the UI.
-        order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, None: 5}
-        in_scope.sort(key=lambda h: order.get(
-            h.max_severity.value if h.max_severity else None, 5))
-        job.hosts = in_scope
+            await asyncio.gather(*(inspect(ip, lat) for ip, lat in live))
+
+        order = {Severity.critical: 0, Severity.high: 1, Severity.low: 2, Severity.safe: 3}
+        devices.sort(key=lambda d: (
+            order[d.severity],
+            0 if (d.php_version or d.open_ports) else 1,
+            [int(o) for o in d.ip.split(".")],
+        ))
+        job.devices = devices

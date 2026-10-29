@@ -8,20 +8,18 @@ services:
     volumes:
       - thscan-data:/data
     environment:
-      # --- Discovery scope (comma-separated) -------------------------------
-      THSCAN_ALLOWED_SUFFIXES: "go.th,or.th,mi.th"
+      # --- Scope: the ONLY networks this instance may scan (deploy-time) ----
+      # Defaults to the private ranges. Set this to the subnet(s) your team is
+      # authorized to scan; anything outside it is refused by the API.
+      THSCAN_ALLOWED_CIDRS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # --- Safety rails ----------------------------------------------------
       THSCAN_MAX_TARGETS: "65536"
       THSCAN_MAX_CONCURRENCY: "50"
-      THSCAN_CONNECT_TIMEOUT: "4"
-      THSCAN_HTTP_TIMEOUT: "8"
-      THSCAN_DNS_TIMEOUT: "4"
+      THSCAN_CONNECT_TIMEOUT: "1.5"
+      THSCAN_HTTP_TIMEOUT: "6"
       THSCAN_POLITE_DELAY_MS: "0"
       THSCAN_WEB_PORTS: "80,443,8080,8443"
-      # Keep authorization gating ON for anything but an isolated lab.
-      THSCAN_REQUIRE_AUTH: "true"
-      # Optional: pin reverse-DNS resolvers, e.g. "1.1.1.1,8.8.8.8".
-      THSCAN_DNS_SERVERS: ""
+      THSCAN_LIVENESS_PORTS: "22,445,3389,53"
     restart: unless-stopped
 
 volumes:

@@ -11,15 +11,16 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import settings
-from .ip_utils_bridge import validate_targets
 from .models import ScanRequest
+from .scanner import discovery
+from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
 from .store import JobStore
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 app = FastAPI(title="thscan", version=__version__,
-              description="Thai government web vulnerability scanner (PHP2Shell aware)")
+              description="LAN device scanner with PHP2Shell / ThaiCERT assessment")
 store = JobStore(settings)
 
 
@@ -32,27 +33,37 @@ async def healthz() -> dict:
 async def get_config() -> dict:
     return {
         "version": __version__,
-        "default_allowed_suffixes": settings.default_allowed_suffixes,
         "web_ports": settings.web_ports,
         "max_targets": settings.max_targets,
         "max_concurrency": settings.max_concurrency,
-        "require_authorization": settings.require_authorization,
+        "allowed_cidrs": settings.allowed_cidrs,
     }
+
+
+@app.get("/api/autodetect")
+async def autodetect() -> dict:
+    """Local subnets this instance could scan (for the 'auto' target mode)."""
+    return {"subnets": discovery.autodetect_subnets()}
 
 
 @app.post("/api/scans")
 async def create_scan(req: ScanRequest) -> dict:
     if not req.targets:
-        raise HTTPException(400, "No targets supplied.")
-    if settings.require_authorization and not req.authorized:
+        raise HTTPException(400, "ไม่ได้ระบุเป้าหมาย")
+    # validate syntax + size
+    try:
+        _, total = expand_targets(req.targets, settings.max_targets)
+    except TargetError as exc:
+        raise HTTPException(400, str(exc))
+    # deploy-time scope enforcement
+    bad = out_of_scope(req.targets, settings.allowed_networks())
+    if bad:
         raise HTTPException(
             403,
-            "Authorization required. You must confirm you are permitted to scan "
-            "the supplied targets before a scan can start.",
+            "เป้าหมายอยู่นอกขอบเขตที่อนุญาต (scope ที่ตั้งไว้ตอน deploy): "
+            + ", ".join(bad)
+            + " — อนุญาตเฉพาะ: " + ", ".join(settings.allowed_cidrs),
         )
-    ok, total, message = validate_targets(req.targets, settings.max_targets)
-    if not ok:
-        raise HTTPException(400, message)
     job = await store.create(req)
     return {"id": job.id, "total_ips": total, **job.summary()}
 
@@ -66,7 +77,7 @@ async def list_scans() -> list:
 async def get_scan(job_id: str) -> dict:
     job = store.get(job_id)
     if job is None:
-        raise HTTPException(404, "Unknown job.")
+        raise HTTPException(404, "ไม่พบงานสแกน")
     return job.model_dump(mode="json")
 
 
@@ -74,66 +85,35 @@ async def get_scan(job_id: str) -> dict:
 async def get_scan_summary(job_id: str) -> dict:
     job = store.get(job_id)
     if job is None:
-        raise HTTPException(404, "Unknown job.")
+        raise HTTPException(404, "ไม่พบงานสแกน")
     return job.summary()
 
 
 @app.post("/api/scans/{job_id}/cancel")
 async def cancel_scan(job_id: str) -> dict:
-    ok = await store.cancel(job_id)
-    if not ok:
-        raise HTTPException(404, "Unknown job.")
+    if not await store.cancel(job_id):
+        raise HTTPException(404, "ไม่พบงานสแกน")
     return {"cancelled": True}
-
-
-@app.get("/api/scans/{job_id}/export.json")
-async def export_json(job_id: str) -> JSONResponse:
-    job = store.get(job_id)
-    if job is None:
-        raise HTTPException(404, "Unknown job.")
-    return JSONResponse(
-        job.model_dump(mode="json"),
-        headers={"Content-Disposition": f'attachment; filename="thscan-{job_id}.json"'},
-    )
 
 
 @app.get("/api/scans/{job_id}/export.csv")
 async def export_csv(job_id: str) -> Response:
     job = store.get(job_id)
     if job is None:
-        raise HTTPException(404, "Unknown job.")
+        raise HTTPException(404, "ไม่พบงานสแกน")
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        "ip", "hostname", "matched_suffix", "port", "scheme", "url",
-        "status", "server", "php_version", "cms",
-        "rule_id", "severity", "confidence", "cve", "title", "recommendation",
-    ])
-    for host in job.hosts:
-        if not host.services:
-            writer.writerow([host.ip, host.hostname or "", host.matched_suffix or "",
-                             "", "", "", "", "", "", "", "", "", "", "", "", ""])
-            continue
-        for svc in host.services:
-            if not svc.findings:
-                writer.writerow([host.ip, host.hostname or "", host.matched_suffix or "",
-                                 svc.port, svc.scheme, svc.url, svc.status_code or "",
-                                 svc.server or "", svc.php_version or "", svc.cms or "",
-                                 "", "", "", "", svc.title or "", ""])
-                continue
-            for f in svc.findings:
-                writer.writerow([
-                    host.ip, host.hostname or "", host.matched_suffix or "",
-                    svc.port, svc.scheme, svc.url, svc.status_code or "",
-                    svc.server or "", svc.php_version or "", svc.cms or "",
-                    f.rule_id, f.severity.value, f.confidence.value,
-                    " ".join(f.cve), svc.title or "", f.recommendation,
-                ])
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="thscan-{job_id}.csv"'},
-    )
+    writer.writerow(["ip", "mac", "device_type", "service", "php_version",
+                     "open_ports", "latency_ms", "severity", "assessment", "cve"])
+    for d in job.devices:
+        cves = " ".join(sorted({c for f in d.findings for c in f.cve}))
+        writer.writerow([
+            d.ip, d.mac or "", d.device_type, d.service, d.php_version or "",
+            " ".join(str(p) for p in d.open_ports), d.latency_ms if d.latency_ms is not None else "",
+            d.severity.value, d.assessment, cves,
+        ])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="thscan-{job_id}.csv"'})
 
 
 @app.get("/")

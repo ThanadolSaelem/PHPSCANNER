@@ -1,186 +1,192 @@
 <!doctype html>
 <html lang="th">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>thscan · ตรวจช่องโหว่ PHP2Shell สำหรับเว็บหน่วยงานไทย</title>
-  <link rel="stylesheet" href="/static/css/styles.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>thscan — เครื่องสแกนช่องโหว่เครือข่าย</title>
+<link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
-  <!-- Top bar ----------------------------------------------------------->
-  <header class="topbar">
-    <div class="topbar-inner">
-      <div class="brand">
-        <div class="brand-logo">th<span>scan</span></div>
-        <div class="brand-sub">ตรวจช่องโหว่ PHP2Shell · เว็บหน่วยงานไทย</div>
-      </div>
-      <nav class="topnav" id="topnav">
-        <a class="nav-item active" data-view="scan">สแกนใหม่</a>
-        <a class="nav-item" data-view="results">ผลการสแกน</a>
-        <a class="nav-item" data-view="history">ประวัติ</a>
-        <a class="nav-item" data-view="about">เกี่ยวกับ</a>
-      </nav>
-      <div class="topbar-pills">
-        <span class="pill pill-safe">ไม่ทำลายระบบ</span>
-      </div>
+<header class="appbar"><div class="appbar-in">
+  <span class="logo">thscan</span>
+  <nav class="appnav" id="appnav">
+    <a class="navlink active" data-view="scan">สแกน</a>
+    <a class="navlink" data-view="results">ผลการสแกน</a>
+    <a class="navlink" data-view="profile">โปรไฟล์</a>
+  </nav>
+  <span class="freepill">ใช้งานฟรี</span>
+</div></header>
+
+<!-- SCAN -->
+<main class="page narrow view" id="view-scan">
+  <div class="card">
+    <div class="chead">
+      <h1>เลือกช่วงเป้าหมายที่จะสแกน<span class="tip" data-tip="ระบุว่าจะให้ระบบไปตรวจหาอุปกรณ์ในช่วงหมายเลข IP ไหน — เลือกวิธีที่สะดวกที่สุด" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></h1>
+      <p>เลือกวิธีที่สะดวก — ระบบคำนวณช่วงและตรวจความถูกต้องให้อัตโนมัติ</p>
     </div>
-  </header>
-
-  <main class="container">
-    <!-- VIEW: Scan ---------------------------------------------------->
-    <section class="view" id="view-scan">
-      <!-- Hero -->
-      <div class="hero">
-        <div class="hero-text">
-          <h1>ตรวจช่องโหว่ <span class="grad">PHP2Shell</span> ให้เว็บหน่วยงานของคุณ</h1>
-          <p>สแกนแบบไม่ทำลายระบบ — ค้นหาเว็บหน่วยงานไทยจากช่วง IP ที่คุณดูแล แล้วตรวจว่าเวอร์ชัน
-             PHP เสี่ยงต่อ <strong>CVE-2026-109618 / CVE-2026-109619</strong> หรือไม่ พร้อมแนวทางแก้ไข</p>
-        </div>
-        <div class="hero-badge">
-          <div class="hero-badge-num">9.2</div>
-          <div class="hero-badge-cap">CVSS · Critical</div>
-        </div>
+    <div class="cbody">
+      <div class="modes" id="modes">
+        <button class="mode" data-mode="auto" aria-pressed="true"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M5 12a7 7 0 0114 0M2 9a11 11 0 0120 0"/></svg></span><b>วง LAN อัตโนมัติ</b><small>แนะนำ · ไม่ต้องพิมพ์</small></button>
+        <button class="mode" data-mode="cidr" aria-pressed="false"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg></span><b>ซับเน็ต</b><small>CIDR</small></button>
+        <button class="mode" data-mode="range" aria-pressed="false"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16M4 12l4-4M4 12l4 4M20 12l-4-4M20 12l-4 4"/></svg></span><b>ช่วง IP</b><small>เริ่ม–สิ้นสุด</small></button>
+        <button class="mode" data-mode="single" aria-pressed="false"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg></span><b>IP เดียว</b><small>เครื่องเดียว</small></button>
       </div>
 
-      <!-- Steps -->
-      <ol class="steps">
-        <li><span class="step-n">1</span> ใส่ช่วง IP ที่ดูแล</li>
-        <li><span class="step-n">2</span> เลือกขอบเขตโดเมน</li>
-        <li><span class="step-n">3</span> ยืนยันสิทธิ์</li>
-        <li><span class="step-n">4</span> เริ่มสแกน</li>
-      </ol>
+      <div class="pane" id="pane-auto">
+        <p class="hint">เลือกการ์ดเครือข่ายของเครื่องนี้ — ระบบเติมช่วงให้อัตโนมัติ<span class="tip" data-tip="ระบบอ่านวงเครือข่ายจากการ์ดแลนของเครื่องที่ติดตั้ง thscan เอง จึงไม่ต้องกรอกเลขใด ๆ" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></p>
+        <div id="nicList"><div class="hint">กำลังอ่านเครือข่าย…</div></div>
+      </div>
 
-      <div class="grid">
-        <div class="card span-2">
-          <div class="card-head">
-            <label class="lbl" for="targets">ช่วงเป้าหมาย (IP ranges)</label>
-            <button class="link-btn" id="exampleBtn" type="button">ใส่ตัวอย่าง</button>
+      <div class="pane hide" id="pane-cidr">
+        <p class="hint">กรอกเลขแต่ละช่อง (0–255) แล้วเลือกขนาดซับเน็ต</p>
+        <div class="iprow">
+          <div class="octet-group">
+            <span class="oct"><input class="o" data-g="cidr" data-i="0" inputmode="numeric" maxlength="3" value="192"><span class="lbl">ส่วนที่ 1</span></span><span class="dot">.</span>
+            <span class="oct"><input class="o" data-g="cidr" data-i="1" inputmode="numeric" maxlength="3" value="168"><span class="lbl">ส่วนที่ 2</span></span><span class="dot">.</span>
+            <span class="oct"><input class="o" data-g="cidr" data-i="2" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 3</span></span><span class="dot">.</span>
+            <span class="oct"><input class="o" data-g="cidr" data-i="3" inputmode="numeric" maxlength="3" value="0"><span class="lbl">ส่วนที่ 4</span></span>
           </div>
-          <textarea id="targets" class="input mono" rows="5"
-            placeholder="203.0.113.0/24&#10;198.51.100.10-198.51.100.60&#10;198.51.100.10-60&#10;203.0.113.7"></textarea>
-          <div class="hint">หนึ่งรายการต่อบรรทัด — รองรับ CIDR, ช่วงแบบขีด (-), หรือ IP เดี่ยว · ใส่เฉพาะ IP ที่คุณมีสิทธิ์ตรวจ</div>
-        </div>
-
-        <div class="card">
-          <label class="lbl">ขอบเขตโดเมน (scope)</label>
-          <div class="chips" id="suffixChips"></div>
-          <input id="customSuffix" class="input" placeholder="เพิ่มเอง เช่น ac.th แล้วกด Enter" />
-          <div class="hint">เก็บเฉพาะ host ที่ชื่อ (PTR) ลงท้ายด้วยที่เลือก</div>
-        </div>
-
-        <div class="card">
-          <label class="lbl" for="ports">พอร์ตเว็บ</label>
-          <input id="ports" class="input mono" value="80, 443, 8080, 8443" />
-          <div class="two-col">
-            <div>
-              <label class="lbl mt" for="concurrency">ความเร็ว (concurrency)</label>
-              <input id="concurrency" type="number" class="input" min="1" />
-            </div>
-            <div>
-              <label class="lbl mt" for="delay">หน่วงต่อ host (ms)</label>
-              <input id="delay" type="number" class="input" min="0" value="0" />
-            </div>
+          <span class="slash">/</span>
+          <div class="subnet"><label>ซับเน็ต<span class="tip" data-tip="ซับเน็ต (CIDR) บอกขนาดวงเครือข่าย — ตัวเลขยิ่งน้อยยิ่งครอบคลุมหลายเครื่อง เช่น /24 = 254 เครื่อง, /22 = 1,022 เครื่อง" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></label>
+            <select id="cidr-prefix"><option value="30">/30 · 2</option><option value="29">/29 · 6</option><option value="28">/28 · 14</option><option value="27">/27 · 30</option><option value="26">/26 · 62</option><option value="25">/25 · 126</option><option value="24" selected>/24 · 254</option><option value="23">/23 · 510</option><option value="22">/22 · 1,022</option><option value="20">/20 · 4,094</option><option value="16">/16 · 65,534</option></select>
           </div>
         </div>
+        <div class="presets" id="cidr-presets">
+          <button class="preset" data-fill="192.168.1.0/24">192.168.1.0/24<span class="ptag">บ้าน/ออฟฟิศ</span></button>
+          <button class="preset" data-fill="10.0.0.0/24">10.0.0.0/24<span class="ptag">ทั่วไป</span></button>
+          <button class="preset" data-fill="172.16.0.0/24">172.16.0.0/24<span class="ptag">องค์กร</span></button>
+        </div>
+      </div>
 
-        <div class="card span-2">
-          <label class="lbl" for="note">บันทึก / เลขที่อ้างอิงงาน <span class="muted-2">(เก็บใน audit log)</span></label>
-          <input id="note" class="input" placeholder="เช่น NCSA-OPS-2026-014 สแกนประจำไตรมาส" />
-
-          <label class="consent mt" id="authWrap">
-            <input type="checkbox" id="authorized" />
-            <span>ข้าพเจ้ายืนยันว่า<strong>ได้รับอนุญาต</strong>ให้สแกนเป้าหมายข้างต้น และจะใช้ผลเพื่อการป้องกันเท่านั้น</span>
-          </label>
-
-          <div class="actions">
-            <button class="btn btn-primary" id="startBtn">เริ่มสแกน</button>
-            <span class="muted small" id="estimate"></span>
+      <div class="pane hide" id="pane-range">
+        <p class="hint">กรอกวงเครือข่าย แล้วเลือกเลขเริ่มต้นถึงสิ้นสุด (ส่วนสุดท้าย)</p>
+        <div class="iprow">
+          <div class="octet-group">
+            <span class="oct"><input class="o" data-g="range" data-i="0" inputmode="numeric" maxlength="3" value="192"><span class="lbl">ส่วนที่ 1</span></span><span class="dot">.</span>
+            <span class="oct"><input class="o" data-g="range" data-i="1" inputmode="numeric" maxlength="3" value="168"><span class="lbl">ส่วนที่ 2</span></span><span class="dot">.</span>
+            <span class="oct"><input class="o" data-g="range" data-i="2" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 3</span></span>
           </div>
-          <div class="err" id="scanErr"></div>
+          <span class="dot">.</span>
+          <div class="octet-group">
+            <span class="oct"><input class="o" data-g="range" data-i="3" inputmode="numeric" maxlength="3" value="1"><span class="lbl">เริ่ม</span></span><span class="rng-sep">–</span>
+            <span class="oct"><input class="o" data-g="range" data-i="4" inputmode="numeric" maxlength="3" value="50"><span class="lbl">สิ้นสุด</span></span>
+          </div>
         </div>
       </div>
 
-      <div class="notice">
-        <span class="notice-icon">🛡️</span>
-        <div><strong>ใช้เฉพาะระบบที่ได้รับอนุญาตเท่านั้น</strong> — เครื่องมือนี้สำหรับทีม CERT/CSIRT
-        และหน่วยงานเจ้าของระบบ ตรวจทรัพย์สินของตนเองแบบไม่ทำลายระบบ การสแกนระบบที่ไม่ได้รับอนุญาตอาจผิดกฎหมาย</div>
-      </div>
-    </section>
-
-    <!-- VIEW: Results ------------------------------------------------->
-    <section class="view hidden" id="view-results">
-      <header class="view-head row">
-        <div>
-          <h2>ผลการสแกน</h2>
-          <p class="muted" id="resultMeta">—</p>
-        </div>
-        <div class="head-actions">
-          <button class="btn" id="cancelBtn">หยุด</button>
-          <button class="btn" id="exportCsv">⤓ CSV</button>
-          <button class="btn" id="exportJson">⤓ JSON</button>
-        </div>
-      </header>
-
-      <div class="progress-wrap">
-        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-        <div class="progress-text muted small" id="progressText">—</div>
+      <div class="pane hide" id="pane-single">
+        <p class="hint">กรอก IP ของเครื่องที่ต้องการตรวจเพียงเครื่องเดียว</p>
+        <div class="iprow"><div class="octet-group">
+          <span class="oct"><input class="o" data-g="single" data-i="0" inputmode="numeric" maxlength="3" value="192"><span class="lbl">ส่วนที่ 1</span></span><span class="dot">.</span>
+          <span class="oct"><input class="o" data-g="single" data-i="1" inputmode="numeric" maxlength="3" value="168"><span class="lbl">ส่วนที่ 2</span></span><span class="dot">.</span>
+          <span class="oct"><input class="o" data-g="single" data-i="2" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 3</span></span><span class="dot">.</span>
+          <span class="oct"><input class="o" data-g="single" data-i="3" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 4</span></span>
+        </div></div>
       </div>
 
-      <div class="stat-row" id="statRow"></div>
-
-      <div class="filters">
-        <input id="searchBox" class="input" placeholder="ค้นหา host / IP / server …" />
-        <div class="seg" id="sevFilter">
-          <button data-sev="all" class="active">ทั้งหมด</button>
-          <button data-sev="critical">Critical</button>
-          <button data-sev="high">High</button>
-          <button data-sev="medium">Medium</button>
-          <button data-sev="low">Low</button>
-          <button data-sev="info">Info</button>
-        </div>
+      <div class="summary ok" id="summary">
+        <div class="line1"><span class="sbadge" id="sumBadge">✓ พร้อมสแกน</span><span class="range" id="sumRange">—</span></div>
+        <div class="smeta"><span>จำนวนเป้าหมาย: <b id="sumCount">—</b></span><span>ประเภท: <b id="sumScope">—</b></span><span>เวลาโดยประมาณ: <b id="sumTime">—</b></span></div>
+        <div class="smsg" id="sumMsg"></div>
       </div>
 
-      <div class="results" id="results"></div>
-      <div class="empty hidden" id="emptyResults">ยังไม่พบ host ที่อยู่ในขอบเขต</div>
-    </section>
-
-    <!-- VIEW: History ------------------------------------------------->
-    <section class="view hidden" id="view-history">
-      <header class="view-head"><h2>ประวัติการสแกน</h2></header>
-      <div class="history" id="historyList"></div>
-    </section>
-
-    <!-- VIEW: About --------------------------------------------------->
-    <section class="view hidden" id="view-about">
-      <header class="view-head"><h2>เกี่ยวกับ thscan</h2></header>
-      <div class="card prose">
-        <p><strong>thscan</strong> เป็นเครื่องมือตรวจหาช่องโหว่แบบ <em>ไม่ทำลายระบบ</em>
-        สำหรับหน่วยงานรัฐไทยและทีม CERT/CSIRT โดยเน้นช่องโหว่
-        <strong>PHP2Shell</strong> (CVE-2026-109618, CVE-2026-109619 · CVSS 9.2)</p>
-        <h3>หลักการทำงาน</h3>
-        <ul>
-          <li>ขยายช่วง IP ที่ผู้ใช้กำหนด → ทำ reverse DNS (PTR) เหมือน <code>nslookup -x</code></li>
-          <li>เก็บเฉพาะ host ที่เป็นโดเมนหน่วยงานไทยตามขอบเขตที่เลือก</li>
-          <li>ตรวจพอร์ตเว็บ แล้วอ่าน header/หน้าเพจเพื่อดูเวอร์ชัน PHP และ CMS</li>
-          <li>เทียบเวอร์ชันกับรุ่นที่แพตช์แล้ว (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35)</li>
+      <div class="seccard">
+        <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg> การตรวจสอบความปลอดภัยของอินพุต<span class="tip" data-tip="ก่อนยิงสัญญาณตรวจ ทุกค่าที่กรอกจะถูกตรวจทั้งฝั่งหน้าเว็บและฝั่งเซิร์ฟเวอร์" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></h3>
+        <ul class="seclist">
+          <li><span class="ck">✓</span> ตรวจค่าตัวเลข 0–255 และรูปแบบ IPv4 ที่ฝั่งเซิร์ฟเวอร์</li>
+          <li><span class="ck">✓</span> จำกัดจำนวนเป้าหมายสูงสุด กันสแกนช่วงใหญ่เกิน</li>
+          <li><span class="ck">✓</span> สแกนได้เฉพาะช่วงที่อยู่ใน scope ที่ผู้ดูแลตั้งไว้ตอน deploy</li>
+          <li><span class="ck">✓</span> ค่าที่กรอกไม่ถูกส่งเข้า shell — กันการฝังคำสั่ง</li>
+          <li><span class="ck">✓</span> การยิงสัญญาณเป็น TCP connect แบบไม่ทำลาย</li>
+          <li><span class="ck">✓</span> มี timeout และบันทึก audit log ทุกการสแกน</li>
         </ul>
-        <h3>ทำไม false positive ต่ำ</h3>
-        <p>ใช้การเทียบเวอร์ชันเป็นหลัก ไม่ยิง exploit จริง ทุก finding มีระดับความเชื่อมั่น
-        (confidence) ให้กรองได้ และระบุหลักฐาน (evidence) ที่ตรวจพบอย่างชัดเจน</p>
-        <h3>สิ่งที่เครื่องมือนี้ไม่ทำ</h3>
-        <p>ไม่ส่ง payload โจมตี ไม่ drop shell ไม่ brute-force ไม่พยายามล็อกอิน —
-        เป็นการตรวจจับเชิงป้องกันล้วน ๆ</p>
-        <h3>การนำไปใช้ (open-source / self-host)</h3>
-        <p>โครงการนี้เผยแพร่เป็น open-source ให้แต่ละหน่วยงานนำไป deploy เองในเครือข่ายที่ตนมีสิทธิ์
-        โปรดเปิด authorization gating ไว้เสมอ และสแกนเฉพาะทรัพย์สินที่ได้รับอนุญาต</p>
       </div>
-    </section>
-  </main>
 
-  <footer class="site-foot">
-    <span id="versionTag">thscan</span> · เครื่องมือตรวจช่องโหว่เชิงป้องกัน · ใช้อย่างมีความรับผิดชอบ
-  </footer>
+      <div class="cfoot"><button class="btn pri big" id="startBtn">เริ่มสแกน</button><span class="cnt" id="footCnt"></span></div>
+      <div class="err" id="scanErr"></div>
+    </div>
+  </div>
+</main>
 
-  <script src="/static/js/app.js"></script>
+<!-- SCANNING -->
+<main class="page view hidden" id="view-scanning">
+  <div class="scanstage">
+    <div class="cap-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg> กำลังสแกน · <span id="scanScope">—</span></div>
+    <div class="ring-wrap">
+      <div class="dotring"></div>
+      <svg class="svg-ring" viewBox="0 0 228 228"><defs><linearGradient id="grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5cf4"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs><circle class="track" cx="114" cy="114" r="104"/><circle class="bar" id="arc" cx="114" cy="114" r="104"/></svg>
+      <div class="orb" id="orb"><div class="pct" id="pct">0%</div></div>
+    </div>
+    <div class="step"><span style="color:var(--brand-solid)">⚡</span> <span id="stepTxt">กำลังเริ่มต้น…</span></div>
+    <div class="linewrap"><div class="linebar"><i id="line"></i></div><div class="lineinfo"><span>ตรวจแล้ว <b id="probed">0</b> / <b id="totalN">0</b></span><span>ออนไลน์ <b id="onlineN">0</b> · เสี่ยง <b id="riskN">0</b></span></div></div>
+    <button class="btn ghost sm" id="cancelBtn">หยุดสแกน</button>
+  </div>
+</main>
+
+<!-- RESULTS -->
+<main class="page view hidden" id="view-results">
+  <div class="panel">
+    <div class="phead">
+      <div class="shield"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <div><h1>ผลการสแกนเครือข่าย</h1><p>ตรวจอุปกรณ์จากเครือข่ายและคัดกรองความปลอดภัย PHP ตามเกณฑ์ ThaiCERT</p></div>
+      <div class="sp"></div>
+      <span class="target-chip" id="resTarget">—</span>
+      <button class="btn ghost sm" id="rescan">⟳ สแกนใหม่</button>
+      <button class="btn pri sm" id="exportBtn">⤓ Export CSV</button>
+    </div>
+    <div class="progress-bar"><i id="resBar"></i></div>
+    <div class="triage" id="triage"></div>
+    <div class="toolbar">
+      <div class="seg" id="cats">
+        <button data-cat="all" aria-pressed="true">ทั้งหมด <span class="n" id="c-all">0</span></button>
+        <button class="risk" data-cat="risk" aria-pressed="false">ต้องดำเนินการ <span class="n" id="c-risk">0</span></button>
+        <button data-cat="php" aria-pressed="false">เซิร์ฟเวอร์ PHP <span class="n" id="c-php">0</span></button>
+        <button data-cat="client" aria-pressed="false">อุปกรณ์ทั่วไป <span class="n" id="c-client">0</span></button>
+      </div>
+      <div class="sp" style="flex:1"></div>
+      <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input id="search" placeholder="ค้นหา IP / บริการ / MAC …"></div>
+      <button class="adv-toggle" id="advToggle" aria-expanded="false">ตัวกรองขั้นสูง <span class="chev">▾</span></button>
+    </div>
+    <div class="adv-panel" id="advPanel">
+      <div class="adv-grid">
+        <div><label>ระดับความรุนแรง</label><select id="f-sev"><option value="all">ทั้งหมด</option><option value="critical">ร้ายแรงมาก</option><option value="low">ความเสี่ยงต่ำ</option><option value="safe">ปลอดภัย</option></select></div>
+        <div><label>บริการเว็บ</label><select id="f-svc"><option value="all">ทั้งหมด</option><option value="web">มีบริการเว็บ/PHP</option><option value="none">ไม่มีบริการเว็บ</option></select></div>
+        <div><label>พอร์ตที่เปิด</label><select id="f-port"><option value="all">ทั้งหมด</option><option value="open">มีพอร์ตเปิด</option><option value="closed">ไม่มีพอร์ตเปิด</option></select></div>
+        <div><label>Latency ไม่เกิน (ms)</label><input id="f-lat" type="number" min="0" placeholder="เช่น 20"></div>
+      </div>
+      <div class="adv-actions"><button class="btn pri sm" id="advApply">ใช้ตัวกรอง</button><button class="btn ghost sm" id="advReset">ล้างตัวกรอง</button></div>
+    </div>
+    <div class="split">
+      <div class="listcol"><div class="listhead">อุปกรณ์ · เรียงความเสี่ยงก่อน</div><div id="list"></div><div class="empty" id="emptyRow" hidden>ไม่พบอุปกรณ์ที่ตรงกับตัวกรอง</div></div>
+      <div class="detail" id="detail"></div>
+    </div>
+    <div class="pfoot"><span class="lead"><span class="g"></span> เสร็จใน <b style="margin:0 3px" id="resDur">—</b> วินาที <span style="color:var(--g400)">(Workers: <span id="resWorkers">—</span>)</span></span><span class="sp"></span><span style="font-size:12px;color:var(--g500)" id="showing"></span></div>
+  </div>
+</main>
+
+<!-- PROFILE -->
+<main class="page mid view hidden" id="view-profile">
+  <div class="panel">
+    <div class="prof-head"><div class="avatar">N</div><div><b>ผู้ดูแลระบบ</b><small>ขอบเขต (scope) ที่อนุญาต: <span id="profScope" class="mono" style="margin-left:4px">—</span><span class="tip" data-tip="ขอบเขตการสแกนถูกกำหนดตอนติดตั้ง (deploy) ด้วย THSCAN_ALLOWED_CIDRS — thscan สแกนได้เฉพาะช่วงนี้" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></small></div></div>
+    <div class="pcards">
+      <div class="pcard"><div class="cap">จำนวนเป้าหมายสูงสุด</div><div class="v" id="profMax">—</div></div>
+      <div class="pcard"><div class="cap">Workers สูงสุด</div><div class="v" id="profWorkers">—</div></div>
+      <div class="pcard"><div class="cap">พอร์ตเว็บที่ตรวจ</div><div class="v mono" style="font-size:14px" id="profPorts">—</div></div>
+    </div>
+    <div class="ilabel" style="margin:20px 22px 0">ตั้งค่า</div>
+    <div class="sgrid">
+      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/></svg></div><span>ตั้งเวลาสแกน</span></div>
+      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 12l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg></div><span>ส่งออกข้อมูล</span></div>
+      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></div><span>รายงาน</span></div>
+      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></div><span>Audit log</span></div>
+      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg></div><span>สิทธิ์การใช้งาน</span></div>
+      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg></div><span>ล้างประวัติ</span></div>
+    </div>
+  </div>
+  <p class="note-inline">ใช้งานฟรี ไม่มีแพ็กเกจพรีเมียม · ขอบเขตการสแกนควบคุมด้วย config ตอน deploy</p>
+</main>
+
+<div class="tt" id="ttBox"></div>
+<script src="/static/js/app.js"></script>
 </body>
 </html>

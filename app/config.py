@@ -1,12 +1,17 @@
 """Runtime configuration.
 
 Values can be overridden by environment variables (prefixed ``THSCAN_``) so the
-container can be tuned without rebuilding. Everything here has conservative,
-safe defaults — the limits exist to keep the scanner from behaving like a DoS
-tool against the networks it is pointed at.
+container can be tuned without rebuilding.
+
+The meaningful access control for this self-hosted tool is the deploy-time
+**scope allowlist** (``THSCAN_ALLOWED_CIDRS``): the operator declares which
+networks this instance may scan, and anything outside it is refused. A per-scan
+"I am authorized" checkbox was removed deliberately — it could not be enforced
+and gave a false sense of control. Every scan is still written to the audit log.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 from typing import List
@@ -19,13 +24,6 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    val = os.environ.get(name)
-    if val is None:
-        return default
-    return val.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _env_list(name: str, default: List[str]) -> List[str]:
     val = os.environ.get(name)
     if not val:
@@ -35,47 +33,50 @@ def _env_list(name: str, default: List[str]) -> List[str]:
 
 @dataclass
 class Settings:
-    # --- Discovery scope -------------------------------------------------
-    # Only hostnames ending in one of these suffixes are kept. The defaults
-    # cover Thai government (go.th), state organizations/SOEs (or.th) and the
-    # military (mi.th). Operators may widen/narrow this in the UI per scan.
-    default_allowed_suffixes: List[str] = field(
+    # --- Scope (deploy-time access control) ------------------------------
+    # The networks this instance is permitted to scan. Defaults to the private
+    # (RFC1918) ranges, so out of the box it only scans local networks. An
+    # operator scanning a routable range must list it here explicitly.
+    allowed_cidrs: List[str] = field(
         default_factory=lambda: _env_list(
-            "THSCAN_ALLOWED_SUFFIXES", ["go.th", "or.th", "mi.th"]
+            "THSCAN_ALLOWED_CIDRS",
+            ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
         )
     )
 
     # --- Safety rails ----------------------------------------------------
-    # Hard cap on how many IP addresses a single scan may expand to. This is a
-    # guard against accidentally pointing the tool at, say, a /8.
     max_targets: int = _env_int("THSCAN_MAX_TARGETS", 65536)
-    # Maximum concurrent host probes.
     max_concurrency: int = _env_int("THSCAN_MAX_CONCURRENCY", 50)
-    # Per-connection timeout (seconds).
-    connect_timeout: float = float(os.environ.get("THSCAN_CONNECT_TIMEOUT", "4"))
-    http_timeout: float = float(os.environ.get("THSCAN_HTTP_TIMEOUT", "8"))
-    dns_timeout: float = float(os.environ.get("THSCAN_DNS_TIMEOUT", "4"))
-    # Optional artificial delay (ms) added per host to be gentle on targets.
+    connect_timeout: float = float(os.environ.get("THSCAN_CONNECT_TIMEOUT", "1.5"))
+    http_timeout: float = float(os.environ.get("THSCAN_HTTP_TIMEOUT", "6"))
     polite_delay_ms: int = _env_int("THSCAN_POLITE_DELAY_MS", 0)
 
-    # Ports probed for web services.
+    # Ports used both to detect a live host and to find web services.
     web_ports: List[int] = field(
         default_factory=lambda: [
             int(p) for p in _env_list("THSCAN_WEB_PORTS", ["80", "443", "8080", "8443"])
         ]
     )
-
-    # Require the operator to tick the "I am authorized" box before a scan
-    # starts. Strongly recommended; can be disabled only for isolated lab use.
-    require_authorization: bool = _env_bool("THSCAN_REQUIRE_AUTH", True)
-
-    # Custom DNS resolver(s) for reverse lookups (empty => system resolver).
-    dns_servers: List[str] = field(
-        default_factory=lambda: _env_list("THSCAN_DNS_SERVERS", [])
+    # Extra ports probed only to decide whether a host is alive (not web).
+    liveness_ports: List[int] = field(
+        default_factory=lambda: [
+            int(p) for p in _env_list("THSCAN_LIVENESS_PORTS", ["22", "445", "3389", "53"])
+        ]
     )
 
-    # Where job state + audit log are persisted inside the container.
     data_dir: str = os.environ.get("THSCAN_DATA_DIR", "/data")
+
+    # --- helpers ---------------------------------------------------------
+    def allowed_networks(self) -> List[ipaddress.IPv4Network]:
+        nets: List[ipaddress.IPv4Network] = []
+        for cidr in self.allowed_cidrs:
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+                if net.version == 4:
+                    nets.append(net)
+            except ValueError:
+                continue
+        return nets
 
 
 settings = Settings()

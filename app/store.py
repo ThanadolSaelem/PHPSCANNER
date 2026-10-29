@@ -45,20 +45,20 @@ class JobStore:
             "scan_started",
             job_id=job_id,
             targets=request.targets,
-            suffixes=request.allowed_suffixes or self.settings.default_allowed_suffixes,
             note=request.note,
-            authorized=request.authorized,
         )
         return job
 
     async def _run(self, job: ScanJob, cancel: asyncio.Event) -> None:
         await self.engine.run(job, cancel)
+        summ = job.summary()
         self.audit.record(
             "scan_finished",
             job_id=job.id,
             state=job.state.value,
-            **job.summary()["severity_counts"],
-            hosts_in_scope=sum(1 for h in job.hosts if h.in_scope),
+            online=summ["online"],
+            risks=summ["risks"],
+            **summ["severity_counts"],
         )
         self._export(job)
 
