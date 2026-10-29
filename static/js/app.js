@@ -66,6 +66,13 @@
     $("#estimate").textContent = n ? `${n} รายการเป้าหมาย` : "";
   }
 
+  const exampleBtn = $("#exampleBtn");
+  if (exampleBtn) exampleBtn.addEventListener("click", () => {
+    $("#targets").value = "203.0.113.0/24\n198.51.100.10-198.51.100.60";
+    updateEstimate();
+    $("#targets").focus();
+  });
+
   // --- Start scan --------------------------------------------------------
   $("#startBtn").addEventListener("click", startScan);
   async function startScan() {

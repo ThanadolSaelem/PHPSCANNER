@@ -3,159 +3,183 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>thscan · เครื่องสแกนช่องโหว่เว็บหน่วยงานไทย</title>
+  <title>thscan · ตรวจช่องโหว่ PHP2Shell สำหรับเว็บหน่วยงานไทย</title>
   <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
 <body>
-  <div class="app">
-    <!-- Sidebar ---------------------------------------------------------->
-    <aside class="sidebar">
+  <!-- Top bar ----------------------------------------------------------->
+  <header class="topbar">
+    <div class="topbar-inner">
       <div class="brand">
-        <div class="brand-mark">th<span>scan</span></div>
-        <div class="brand-sub">PHP2Shell Vulnerability Scanner</div>
+        <div class="brand-logo">th<span>scan</span></div>
+        <div class="brand-sub">ตรวจช่องโหว่ PHP2Shell · เว็บหน่วยงานไทย</div>
       </div>
-
-      <nav class="nav">
-        <a class="nav-item active" data-view="scan"><span class="ni">◎</span> สแกนใหม่</a>
-        <a class="nav-item" data-view="results"><span class="ni">▤</span> ผลการสแกน</a>
-        <a class="nav-item" data-view="history"><span class="ni">↻</span> ประวัติ</a>
-        <a class="nav-item" data-view="about"><span class="ni">ⓘ</span> เกี่ยวกับ</a>
+      <nav class="topnav" id="topnav">
+        <a class="nav-item active" data-view="scan">สแกนใหม่</a>
+        <a class="nav-item" data-view="results">ผลการสแกน</a>
+        <a class="nav-item" data-view="history">ประวัติ</a>
+        <a class="nav-item" data-view="about">เกี่ยวกับ</a>
       </nav>
-
-      <div class="sidebar-foot">
-        <div class="pill pill-safe">Non-destructive</div>
-        <div class="muted small" id="versionTag">thscan</div>
+      <div class="topbar-pills">
+        <span class="pill pill-safe">ไม่ทำลายระบบ</span>
       </div>
-    </aside>
+    </div>
+  </header>
 
-    <!-- Main ------------------------------------------------------------->
-    <main class="main">
-      <!-- Authorization banner -->
-      <div class="authbar" id="authBar">
-        <span class="authbar-icon">⚠</span>
-        <div>
-          <strong>ใช้เฉพาะระบบที่ได้รับอนุญาตเท่านั้น</strong> —
-          เครื่องมือนี้สำหรับทีม CERT/CSIRT และหน่วยงานเจ้าของระบบ เพื่อตรวจหาช่องโหว่
-          PHP2Shell ในทรัพย์สินของตนเองแบบไม่ทำลายระบบ การสแกนระบบที่ไม่ได้รับอนุญาตอาจผิดกฎหมาย
+  <main class="container">
+    <!-- VIEW: Scan ---------------------------------------------------->
+    <section class="view" id="view-scan">
+      <!-- Hero -->
+      <div class="hero">
+        <div class="hero-text">
+          <h1>ตรวจช่องโหว่ <span class="grad">PHP2Shell</span> ให้เว็บหน่วยงานของคุณ</h1>
+          <p>สแกนแบบไม่ทำลายระบบ — ค้นหาเว็บหน่วยงานไทยจากช่วง IP ที่คุณดูแล แล้วตรวจว่าเวอร์ชัน
+             PHP เสี่ยงต่อ <strong>CVE-2026-109618 / CVE-2026-109619</strong> หรือไม่ พร้อมแนวทางแก้ไข</p>
+        </div>
+        <div class="hero-badge">
+          <div class="hero-badge-num">9.2</div>
+          <div class="hero-badge-cap">CVSS · Critical</div>
         </div>
       </div>
 
-      <!-- VIEW: Scan ----------------------------------------------------->
-      <section class="view" id="view-scan">
-        <header class="view-head">
-          <h1>ตั้งค่าการสแกน</h1>
-          <p class="muted">ระบุช่วง IP ที่คุณมีสิทธิ์สแกน ระบบจะทำ reverse DNS เพื่อค้นหาเฉพาะเว็บหน่วยงานไทย (.go.th / .or.th / …) แล้วตรวจเวอร์ชัน PHP/CMS</p>
-        </header>
+      <!-- Steps -->
+      <ol class="steps">
+        <li><span class="step-n">1</span> ใส่ช่วง IP ที่ดูแล</li>
+        <li><span class="step-n">2</span> เลือกขอบเขตโดเมน</li>
+        <li><span class="step-n">3</span> ยืนยันสิทธิ์</li>
+        <li><span class="step-n">4</span> เริ่มสแกน</li>
+      </ol>
 
-        <div class="grid">
-          <div class="card span-2">
-            <label class="lbl">ช่วงเป้าหมาย (IP ranges)</label>
-            <textarea id="targets" class="input mono" rows="6"
-              placeholder="203.0.113.0/24&#10;198.51.100.10-198.51.100.60&#10;198.51.100.10-60&#10;203.0.113.7"></textarea>
-            <div class="hint">หนึ่งรายการต่อบรรทัด — รองรับ CIDR, ช่วงแบบขีด (-), หรือ IP เดี่ยว</div>
+      <div class="grid">
+        <div class="card span-2">
+          <div class="card-head">
+            <label class="lbl" for="targets">ช่วงเป้าหมาย (IP ranges)</label>
+            <button class="link-btn" id="exampleBtn" type="button">ใส่ตัวอย่าง</button>
           </div>
+          <textarea id="targets" class="input mono" rows="5"
+            placeholder="203.0.113.0/24&#10;198.51.100.10-198.51.100.60&#10;198.51.100.10-60&#10;203.0.113.7"></textarea>
+          <div class="hint">หนึ่งรายการต่อบรรทัด — รองรับ CIDR, ช่วงแบบขีด (-), หรือ IP เดี่ยว · ใส่เฉพาะ IP ที่คุณมีสิทธิ์ตรวจ</div>
+        </div>
 
-          <div class="card">
-            <label class="lbl">โดเมนที่จะเก็บ (scope)</label>
-            <div class="chips" id="suffixChips"></div>
-            <input id="customSuffix" class="input" placeholder="เพิ่มเอง เช่น ac.th แล้วกด Enter" />
-            <div class="hint">เก็บเฉพาะ host ที่ PTR ลงท้ายด้วย suffix ที่เลือก</div>
-          </div>
+        <div class="card">
+          <label class="lbl">ขอบเขตโดเมน (scope)</label>
+          <div class="chips" id="suffixChips"></div>
+          <input id="customSuffix" class="input" placeholder="เพิ่มเอง เช่น ac.th แล้วกด Enter" />
+          <div class="hint">เก็บเฉพาะ host ที่ชื่อ (PTR) ลงท้ายด้วยที่เลือก</div>
+        </div>
 
-          <div class="card">
-            <label class="lbl">พอร์ตเว็บ</label>
-            <input id="ports" class="input mono" value="80, 443, 8080, 8443" />
-            <label class="lbl mt">Concurrency</label>
-            <input id="concurrency" type="number" class="input" min="1" />
-            <label class="lbl mt">หน่วงต่อ host (ms) — สุภาพต่อเป้าหมาย</label>
-            <input id="delay" type="number" class="input" min="0" value="0" />
-          </div>
-
-          <div class="card span-2">
-            <label class="lbl">บันทึก / เลขที่อ้างอิงงาน (เก็บใน audit log)</label>
-            <input id="note" class="input" placeholder="เช่น NCSA-OPS-2026-014 สแกนประจำไตรมาส" />
-
-            <label class="check mt" id="authWrap">
-              <input type="checkbox" id="authorized" />
-              <span>ข้าพเจ้ายืนยันว่าได้รับอนุญาตให้สแกนเป้าหมายข้างต้น และจะใช้ผลเพื่อการป้องกันเท่านั้น</span>
-            </label>
-
-            <div class="actions">
-              <button class="btn btn-primary" id="startBtn">▶ เริ่มสแกน</button>
-              <span class="muted small" id="estimate"></span>
+        <div class="card">
+          <label class="lbl" for="ports">พอร์ตเว็บ</label>
+          <input id="ports" class="input mono" value="80, 443, 8080, 8443" />
+          <div class="two-col">
+            <div>
+              <label class="lbl mt" for="concurrency">ความเร็ว (concurrency)</label>
+              <input id="concurrency" type="number" class="input" min="1" />
             </div>
-            <div class="err" id="scanErr"></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- VIEW: Results -------------------------------------------------->
-      <section class="view hidden" id="view-results">
-        <header class="view-head row">
-          <div>
-            <h1>ผลการสแกน</h1>
-            <p class="muted" id="resultMeta">—</p>
-          </div>
-          <div class="head-actions">
-            <button class="btn" id="cancelBtn">■ หยุด</button>
-            <button class="btn" id="exportCsv">⤓ CSV</button>
-            <button class="btn" id="exportJson">⤓ JSON</button>
-          </div>
-        </header>
-
-        <div class="progress-wrap">
-          <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-          <div class="progress-text muted small" id="progressText">—</div>
-        </div>
-
-        <div class="stat-row" id="statRow"></div>
-
-        <div class="filters">
-          <input id="searchBox" class="input" placeholder="ค้นหา host / IP / server …" />
-          <div class="seg" id="sevFilter">
-            <button data-sev="all" class="active">ทั้งหมด</button>
-            <button data-sev="critical">Critical</button>
-            <button data-sev="high">High</button>
-            <button data-sev="medium">Medium</button>
-            <button data-sev="low">Low</button>
-            <button data-sev="info">Info</button>
+            <div>
+              <label class="lbl mt" for="delay">หน่วงต่อ host (ms)</label>
+              <input id="delay" type="number" class="input" min="0" value="0" />
+            </div>
           </div>
         </div>
 
-        <div class="results" id="results"></div>
-        <div class="empty hidden" id="emptyResults">ยังไม่พบ host ที่อยู่ใน scope</div>
-      </section>
+        <div class="card span-2">
+          <label class="lbl" for="note">บันทึก / เลขที่อ้างอิงงาน <span class="muted-2">(เก็บใน audit log)</span></label>
+          <input id="note" class="input" placeholder="เช่น NCSA-OPS-2026-014 สแกนประจำไตรมาส" />
 
-      <!-- VIEW: History -------------------------------------------------->
-      <section class="view hidden" id="view-history">
-        <header class="view-head"><h1>ประวัติการสแกน</h1></header>
-        <div class="history" id="historyList"></div>
-      </section>
+          <label class="consent mt" id="authWrap">
+            <input type="checkbox" id="authorized" />
+            <span>ข้าพเจ้ายืนยันว่า<strong>ได้รับอนุญาต</strong>ให้สแกนเป้าหมายข้างต้น และจะใช้ผลเพื่อการป้องกันเท่านั้น</span>
+          </label>
 
-      <!-- VIEW: About ---------------------------------------------------->
-      <section class="view hidden" id="view-about">
-        <header class="view-head"><h1>เกี่ยวกับ thscan</h1></header>
-        <div class="card prose">
-          <p><strong>thscan</strong> เป็นเครื่องมือตรวจหาช่องโหว่แบบ <em>ไม่ทำลายระบบ</em>
-          สำหรับหน่วยงานรัฐไทยและทีม CERT/CSIRT โดยเน้นช่องโหว่
-          <strong>PHP2Shell</strong> (CVE-2026-109618, CVE-2026-109619 · CVSS 9.2)</p>
-          <h3>หลักการทำงาน</h3>
-          <ul>
-            <li>ขยายช่วง IP ที่ผู้ใช้กำหนด → ทำ reverse DNS (PTR) เหมือน <code>nslookup -x</code></li>
-            <li>เก็บเฉพาะ host ที่เป็นโดเมนหน่วยงานไทยตาม scope ที่เลือก</li>
-            <li>ตรวจพอร์ตเว็บ แล้วอ่าน header/หน้าเพจเพื่อดูเวอร์ชัน PHP และ CMS</li>
-            <li>เทียบเวอร์ชันกับรุ่นที่แพตช์แล้ว (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35)</li>
-          </ul>
-          <h3>ทำไม false positive ต่ำ</h3>
-          <p>ใช้การเทียบเวอร์ชันเป็นหลัก ไม่ยิง exploit จริง ทุก finding มีระดับความเชื่อมั่น
-          (confidence) ให้กรองได้ และระบุหลักฐาน (evidence) ที่ตรวจพบอย่างชัดเจน</p>
-          <h3>สิ่งที่เครื่องมือนี้ไม่ทำ</h3>
-          <p>ไม่ส่ง payload โจมตี ไม่ drop shell ไม่ brute-force ไม่พยายามล็อกอิน —
-          เป็นการตรวจจับเชิงป้องกันล้วน ๆ</p>
+          <div class="actions">
+            <button class="btn btn-primary" id="startBtn">เริ่มสแกน</button>
+            <span class="muted small" id="estimate"></span>
+          </div>
+          <div class="err" id="scanErr"></div>
         </div>
-      </section>
-    </main>
-  </div>
+      </div>
+
+      <div class="notice">
+        <span class="notice-icon">🛡️</span>
+        <div><strong>ใช้เฉพาะระบบที่ได้รับอนุญาตเท่านั้น</strong> — เครื่องมือนี้สำหรับทีม CERT/CSIRT
+        และหน่วยงานเจ้าของระบบ ตรวจทรัพย์สินของตนเองแบบไม่ทำลายระบบ การสแกนระบบที่ไม่ได้รับอนุญาตอาจผิดกฎหมาย</div>
+      </div>
+    </section>
+
+    <!-- VIEW: Results ------------------------------------------------->
+    <section class="view hidden" id="view-results">
+      <header class="view-head row">
+        <div>
+          <h2>ผลการสแกน</h2>
+          <p class="muted" id="resultMeta">—</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="cancelBtn">หยุด</button>
+          <button class="btn" id="exportCsv">⤓ CSV</button>
+          <button class="btn" id="exportJson">⤓ JSON</button>
+        </div>
+      </header>
+
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-text muted small" id="progressText">—</div>
+      </div>
+
+      <div class="stat-row" id="statRow"></div>
+
+      <div class="filters">
+        <input id="searchBox" class="input" placeholder="ค้นหา host / IP / server …" />
+        <div class="seg" id="sevFilter">
+          <button data-sev="all" class="active">ทั้งหมด</button>
+          <button data-sev="critical">Critical</button>
+          <button data-sev="high">High</button>
+          <button data-sev="medium">Medium</button>
+          <button data-sev="low">Low</button>
+          <button data-sev="info">Info</button>
+        </div>
+      </div>
+
+      <div class="results" id="results"></div>
+      <div class="empty hidden" id="emptyResults">ยังไม่พบ host ที่อยู่ในขอบเขต</div>
+    </section>
+
+    <!-- VIEW: History ------------------------------------------------->
+    <section class="view hidden" id="view-history">
+      <header class="view-head"><h2>ประวัติการสแกน</h2></header>
+      <div class="history" id="historyList"></div>
+    </section>
+
+    <!-- VIEW: About --------------------------------------------------->
+    <section class="view hidden" id="view-about">
+      <header class="view-head"><h2>เกี่ยวกับ thscan</h2></header>
+      <div class="card prose">
+        <p><strong>thscan</strong> เป็นเครื่องมือตรวจหาช่องโหว่แบบ <em>ไม่ทำลายระบบ</em>
+        สำหรับหน่วยงานรัฐไทยและทีม CERT/CSIRT โดยเน้นช่องโหว่
+        <strong>PHP2Shell</strong> (CVE-2026-109618, CVE-2026-109619 · CVSS 9.2)</p>
+        <h3>หลักการทำงาน</h3>
+        <ul>
+          <li>ขยายช่วง IP ที่ผู้ใช้กำหนด → ทำ reverse DNS (PTR) เหมือน <code>nslookup -x</code></li>
+          <li>เก็บเฉพาะ host ที่เป็นโดเมนหน่วยงานไทยตามขอบเขตที่เลือก</li>
+          <li>ตรวจพอร์ตเว็บ แล้วอ่าน header/หน้าเพจเพื่อดูเวอร์ชัน PHP และ CMS</li>
+          <li>เทียบเวอร์ชันกับรุ่นที่แพตช์แล้ว (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35)</li>
+        </ul>
+        <h3>ทำไม false positive ต่ำ</h3>
+        <p>ใช้การเทียบเวอร์ชันเป็นหลัก ไม่ยิง exploit จริง ทุก finding มีระดับความเชื่อมั่น
+        (confidence) ให้กรองได้ และระบุหลักฐาน (evidence) ที่ตรวจพบอย่างชัดเจน</p>
+        <h3>สิ่งที่เครื่องมือนี้ไม่ทำ</h3>
+        <p>ไม่ส่ง payload โจมตี ไม่ drop shell ไม่ brute-force ไม่พยายามล็อกอิน —
+        เป็นการตรวจจับเชิงป้องกันล้วน ๆ</p>
+        <h3>การนำไปใช้ (open-source / self-host)</h3>
+        <p>โครงการนี้เผยแพร่เป็น open-source ให้แต่ละหน่วยงานนำไป deploy เองในเครือข่ายที่ตนมีสิทธิ์
+        โปรดเปิด authorization gating ไว้เสมอ และสแกนเฉพาะทรัพย์สินที่ได้รับอนุญาต</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <span id="versionTag">thscan</span> · เครื่องมือตรวจช่องโหว่เชิงป้องกัน · ใช้อย่างมีความรับผิดชอบ
+  </footer>
 
   <script src="/static/js/app.js"></script>
 </body>
