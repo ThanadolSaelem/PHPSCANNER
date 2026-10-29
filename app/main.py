@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -21,23 +22,23 @@ from .store import JobStore
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.stop()
+
+
 app = FastAPI(
     title="thscan",
     version=__version__,
     description="LAN & Enterprise device scanner with PHP2Shell / ThaiCERT compliance assessment",
+    lifespan=lifespan,
 )
 store = JobStore(settings)
 scheduler = Scheduler(store)
-
-
-@app.on_event("startup")
-async def _start_scheduler() -> None:
-    scheduler.start()
-
-
-@app.on_event("shutdown")
-async def _stop_scheduler() -> None:
-    await scheduler.stop()
 
 
 @app.get("/healthz")

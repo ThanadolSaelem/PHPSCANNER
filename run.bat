@@ -2,13 +2,14 @@
 rem thscan - start the app locally (Windows). Double-click this file.
 cd /d "%~dp0"
 where py >nul 2>nul && (set PY=py) || (set PY=python)
+%PY% -c "import sys; sys.exit(sys.version_info < (3, 11))" >nul 2>nul || (echo Python 3.11+ is required: https://www.python.org/downloads/ & pause & exit /b 1)
 if not exist .venv (
   echo [thscan] creating virtualenv...
-  %PY% -m venv .venv || (echo Python 3.10+ is required: https://www.python.org/downloads/ & pause & exit /b 1)
+  %PY% -m venv .venv || (echo Python 3.11+ is required: https://www.python.org/downloads/ & pause & exit /b 1)
 )
 call .venv\Scripts\activate.bat
 echo [thscan] installing requirements...
-pip install -q -r requirements.txt
+pip install -q -r requirements.txt || (echo. & echo [thscan] installing requirements failed. Delete the .venv folder and run run.bat again. & pause & exit /b 1)
 if "%THSCAN_PORT%"=="" set THSCAN_PORT=8000
 echo.
 echo   thscan is running -^>  http://localhost:%THSCAN_PORT%

@@ -20,8 +20,8 @@ thscan เป็นเว็บแอปที่มีเซิร์ฟเว�
 
 | ระบบ | วิธีรัน |
 |---|---|
-| **Windows** | ดับเบิลคลิก **`run.bat`** (ต้องมี [Python 3.10+](https://www.python.org/downloads/)) |
-| **macOS / Linux** | `./run.sh` |
+| **Windows** | ดับเบิลคลิก **`run.bat`** (ต้องมี [Python 3.11+](https://www.python.org/downloads/)) |
+| **macOS / Linux** | `./run.sh` (ต้องมี Python 3.11+) |
 | **Docker (Linux)** | `docker compose up --build -d` |
 
 ครั้งแรกจะติดตั้งไลบรารีให้อัตโนมัติ แล้วเปิดเบราว์เซอร์ให้เอง → เลือกเครือข่าย → **เริ่มสแกน**

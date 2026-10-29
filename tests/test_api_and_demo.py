@@ -101,3 +101,14 @@ def test_csv_cell_neutralises_formulas():
     assert _csv_cell("@cmd") == "'@cmd"
     assert _csv_cell("portal.go.th") == "portal.go.th"
     assert _csv_cell(None) == ""
+
+
+def test_app_lifespan_starts_and_stops_scheduler():
+    from fastapi.testclient import TestClient
+
+    from app.main import app, scheduler
+
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        assert scheduler._task is not None and not scheduler._task.done()
+    assert scheduler._task is None
