@@ -1,6 +1,5 @@
 """Port profiles, website (link) targets and the same-host redirect rule."""
 import asyncio
-import ipaddress
 from datetime import datetime, timezone
 
 import httpx
@@ -43,13 +42,13 @@ def test_describe_known_and_unknown():
 def test_site_parse_and_check():
     s = sites.parse("https://www.agency.go.th/path")
     assert (s.host, s.port) == ("www.agency.go.th", 443)
+    # a government domain is allowed regardless of where it resolves (CDN, public IP)
     s.ips = ["10.1.2.3"]
-    assert sites.check(s, ["go.th"], [ipaddress.ip_network("10.0.0.0/8")]) == []
+    assert sites.check(s, ["go.th"]) == []
     s.ips = ["8.8.8.8"]
-    assert "นอกขอบเขต" in sites.check(s, ["go.th"], [ipaddress.ip_network("10.0.0.0/8")])[0]
+    assert sites.check(s, ["go.th"]) == []
     other = sites.parse("example.com")
-    other.ips = ["10.1.2.3"]
-    assert "ไม่ใช่โดเมนหน่วยงาน" in sites.check(other, ["go.th"], [ipaddress.ip_network("10.0.0.0/8")])[0]
+    assert "ไม่ใช่โดเมนหน่วยงาน" in sites.check(other, ["go.th"])[0]
 
 
 @pytest.mark.parametrize("text", ["ftp://a.go.th", "http://10.0.0.1/", "a_b.go.th", "x" * 3000])
@@ -90,18 +89,37 @@ def test_scan_by_link_uses_resolved_ip_and_host(api):
     assert req.extra_web_ports == [8081]
 
 
-def test_link_out_of_scope_or_not_gov_is_refused(api):
+def test_gov_link_out_of_scope_is_allowed(api):
+    # cdn.agency.go.th resolves to 8.8.8.8 (outside THSCAN_ALLOWED_CIDRS) but is
+    # a government domain, so it is scanned — scope does not bind website targets.
     client, created = api
-    assert client.post("/api/scans", json={"sites": ["cdn.agency.go.th"]}).status_code == 403
+    r = client.post("/api/scans", json={"sites": ["cdn.agency.go.th"]})
+    assert r.status_code == 200, r.text
+    assert created[0].targets == ["8.8.8.8"]
+    assert created[0].site_hosts == {"8.8.8.8": "cdn.agency.go.th"}
+
+
+def test_non_gov_link_is_refused(api):
+    client, created = api
     assert client.post("/api/scans", json={"sites": ["shop.example.com"]}).status_code == 403
     assert not created
 
 
+def test_direct_ip_target_still_bound_by_scope(api):
+    # the deploy-time IP scope still applies to directly-typed IP/CIDR targets
+    client, created = api
+    assert client.post("/api/scans", json={"targets": ["8.8.8.0/24"]}).status_code == 403
+    assert client.post("/api/scans", json={"targets": ["10.0.0.0/28"]}).status_code == 200
+
+
 def test_resolve_preview(api):
     client, _ = api
-    res = client.get("/api/resolve", params={"q": "web.agency.go.th\ncdn.agency.go.th"}).json()["sites"]
+    res = client.get("/api/resolve", params={"q": "web.agency.go.th\nshop.example.com"}).json()["sites"]
     assert res[0]["ips"] == ["10.9.9.9"] and not res[0]["problems"]
-    assert res[1]["refused"] is True
+    assert res[1]["refused"] is True  # not a government domain
+    # a government domain outside the IP scope is not refused
+    gov = client.get("/api/resolve", params={"q": "cdn.agency.go.th"}).json()["sites"][0]
+    assert gov["refused"] is False and not gov["problems"]
 
 
 def test_port_profile_validation_and_budget(api, monkeypatch):

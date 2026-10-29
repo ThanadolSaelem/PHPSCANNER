@@ -90,7 +90,7 @@ async def _resolve_sites(texts: list) -> list:
         try:
             site = await sites.resolve(sites.parse(text))
             item.update(host=site.host, ips=site.ips, port=site.port)
-            item["problems"] = sites.check(site, settings.gov_suffixes, settings.allowed_networks())
+            item["problems"] = sites.check(site, settings.gov_suffixes)
             item["suffix"] = site.suffix
             item["refused"] = bool(item["problems"])
         except sites.SiteError as exc:
@@ -125,6 +125,7 @@ async def create_scan(req: ScanRequest) -> dict:
 
     if len(req.sites) > sites.MAX_SITES:
         raise HTTPException(400, f"ตรวจเว็บไซต์ได้ครั้งละไม่เกิน {sites.MAX_SITES} ลิงก์")
+    direct_targets = list(req.targets)  # only these are bound by the IP scope
     if req.sites:
         report = await _resolve_sites(req.sites)
         problems = [p for r in report for p in r["problems"]]
@@ -146,7 +147,9 @@ async def create_scan(req: ScanRequest) -> dict:
         _, total = expand_targets(req.targets, settings.max_targets)
     except TargetError as exc:
         raise HTTPException(400, str(exc))
-    bad = out_of_scope(req.targets, settings.allowed_networks())
+    # Website targets are authorised by their .go.th domain (checked above),
+    # not by the IP scope, so only directly-typed IP/CIDR targets are checked.
+    bad = out_of_scope(direct_targets, settings.allowed_networks())
     if bad:
         raise HTTPException(
             403,

@@ -96,14 +96,16 @@ async def resolve(site: Site, timeout: float = 4.0) -> Site:
     return site
 
 
-def check(site: Site, suffixes: List[str], allowed: "list[ipaddress.IPv4Network]") -> List[str]:
-    """Problems that stop this site from being scanned (empty list = OK)."""
+def check(site: Site, suffixes: List[str]) -> List[str]:
+    """Problems that stop this site from being scanned (empty list = OK).
+
+    A website is authorised by being a government domain, not by its hosting
+    IP: a .go.th site may legitimately sit on a CDN or a public address far
+    outside the LAN scope. So the IP scope (THSCAN_ALLOWED_CIDRS) is *not*
+    enforced here — only directly-typed IP/CIDR targets are bound by it.
+    """
     problems: List[str] = []
     site.suffix = match_suffix(site.host, suffixes)
     if not site.suffix:
         problems.append(f"{site.host} ไม่ใช่โดเมนหน่วยงาน (อนุญาตเฉพาะ {', '.join(suffixes)})")
-    outside = [ip for ip in site.ips
-               if not any(ipaddress.ip_address(ip) in net for net in allowed)]
-    if outside:
-        problems.append(f"{site.host} ชี้ไปที่ {', '.join(outside)} ซึ่งอยู่นอกขอบเขตที่อนุญาต")
     return problems
