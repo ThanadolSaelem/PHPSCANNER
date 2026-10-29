@@ -1,0 +1,28 @@
+services:
+  thscan:
+    build: .
+    image: thscan:1.0.0
+    container_name: thscan
+    ports:
+      - "8000:8000"
+    volumes:
+      - thscan-data:/data
+    environment:
+      # --- Discovery scope (comma-separated) -------------------------------
+      THSCAN_ALLOWED_SUFFIXES: "go.th,or.th,mi.th"
+      # --- Safety rails ----------------------------------------------------
+      THSCAN_MAX_TARGETS: "65536"
+      THSCAN_MAX_CONCURRENCY: "50"
+      THSCAN_CONNECT_TIMEOUT: "4"
+      THSCAN_HTTP_TIMEOUT: "8"
+      THSCAN_DNS_TIMEOUT: "4"
+      THSCAN_POLITE_DELAY_MS: "0"
+      THSCAN_WEB_PORTS: "80,443,8080,8443"
+      # Keep authorization gating ON for anything but an isolated lab.
+      THSCAN_REQUIRE_AUTH: "true"
+      # Optional: pin reverse-DNS resolvers, e.g. "1.1.1.1,8.8.8.8".
+      THSCAN_DNS_SERVERS: ""
+    restart: unless-stopped
+
+volumes:
+  thscan-data:
