@@ -1,25 +1,10 @@
-"""Vulnerability rules — version-based, non-destructive, low false positive.
-
-Design principle: we never send an exploit or a destructive payload. We read
-what a service voluntarily advertises (HTTP response headers, generator tags,
-well-known marker files) and reason about it. Version matching against the
-official fixed releases is deliberately the primary signal because it produces
-the fewest false positives and is completely safe to run against production.
-
-The headline rule is PHP2Shell (CVE-2026-109618 / CVE-2026-109619). Additional
-hygiene rules give operators a fuller picture without adding noise — each has
-an explicit confidence level so the UI can let teams filter out anything below
-"high" if they only care about confirmed exposure.
-"""
+"""Vulnerability rules — version-based, non-destructive, low false positive."""
 from __future__ import annotations
 
 import re
 from typing import Dict, List, NamedTuple, Optional
 
 from ..models import Confidence, Finding, Severity
-
-
-# --- PHP version handling -------------------------------------------------
 
 _PHP_RE = re.compile(r"php/?\s*v?(\d+)\.(\d+)\.(\d+)", re.IGNORECASE)
 
@@ -29,7 +14,7 @@ class PhpVersion(NamedTuple):
     minor: int
     patch: int
 
-    def __str__(self) -> str:  # pragma: no cover - trivial
+    def __str__(self) -> str:
         return f"{self.major}.{self.minor}.{self.patch}"
 
     def as_tuple(self) -> tuple[int, int, int]:
@@ -37,7 +22,6 @@ class PhpVersion(NamedTuple):
 
 
 def parse_php_version(*sources: Optional[str]) -> Optional[PhpVersion]:
-    """Extract a PHP x.y.z version from any of the header strings given."""
     for src in sources:
         if not src:
             continue
@@ -48,17 +32,9 @@ def parse_php_version(*sources: Optional[str]) -> Optional[PhpVersion]:
 
 
 def php_present(*sources: Optional[str]) -> bool:
-    """True if PHP is advertised at all, even without a full version."""
-    for src in sources:
-        if src and "php" in src.lower():
-            return True
-    return False
+    return any(src and "php" in src.lower() for src in sources)
 
 
-# PHP2Shell fixed releases, by branch. A service on branch x.y is vulnerable if
-# its patch level is below the fixed one. Branches older than the oldest fixed
-# branch (8.2) are End-of-Life and, per the advisory, affected back to 5.4.0
-# with no vendor patch available.
 PHP2SHELL_FIXED: Dict[tuple[int, int], tuple[int, int, int]] = {
     (8, 5): (8, 5, 12),
     (8, 4): (8, 4, 27),
@@ -75,180 +51,198 @@ class Php2ShellVerdict(NamedTuple):
     detail: str
 
 
-def assess_php2shell(version: Optional[PhpVersion], php_seen: bool) -> Optional[Php2ShellVerdict]:
-    """Decide whether a service is exposed to PHP2Shell.
-
-    Returns ``None`` when PHP is not involved at all (no finding to raise).
-    """
+def assess_php2shell(
+    version: Optional[PhpVersion], php_seen: bool
+) -> Optional[Php2ShellVerdict]:
     if version is None:
         if php_seen:
             return Php2ShellVerdict(
-                vulnerable=False,
-                confidence=Confidence.low,
-                detail=(
-                    "PHP is present but its exact version is not disclosed "
-                    "(expose_php is likely off). Verify the build manually "
-                    "against the fixed releases."
-                ),
+                False,
+                Confidence.low,
+                "PHP ทำงานอยู่แต่ไม่เปิดเผยเวอร์ชัน (expose_php ปิด) ตรวจยืนยันบนเครื่องอีกครั้ง",
             )
         return None
 
     branch = (version.major, version.minor)
     fixed = PHP2SHELL_FIXED.get(branch)
-
     if fixed is not None:
         if version.as_tuple() < fixed:
             return Php2ShellVerdict(
-                vulnerable=True,
-                confidence=Confidence.confirmed,
-                detail=(
-                    f"PHP {version} is below the fixed release "
-                    f"{fixed[0]}.{fixed[1]}.{fixed[2]} for its branch."
-                ),
+                True,
+                Confidence.confirmed,
+                f"PHP {version} ต่ำกว่ารุ่นที่แพตช์ {fixed[0]}.{fixed[1]}.{fixed[2]} ของสาขานี้",
             )
         return Php2ShellVerdict(
-            vulnerable=False,
-            confidence=Confidence.confirmed,
-            detail=f"PHP {version} is at or above the fixed release for its branch.",
+            False,
+            Confidence.confirmed,
+            f"PHP {version} เป็นรุ่นที่แพตช์แล้วของสาขานี้",
         )
-
-    # Branch not in the fixed table.
     if branch < PHP2SHELL_OLDEST_FIXED_BRANCH:
         return Php2ShellVerdict(
-            vulnerable=True,
-            confidence=Confidence.high,
-            detail=(
-                f"PHP {version} is on an End-of-Life branch ({branch[0]}.{branch[1]}). "
-                "The advisory reports the flaw back to 5.4.0 and no patch is "
-                "available for this branch — upgrade to a supported PHP."
-            ),
+            True,
+            Confidence.high,
+            f"PHP {version} อยู่บนสาขาที่หมดอายุ (End-of-Life) ไม่มีแพตช์ — ควรย้ายไปรุ่นที่รองรับ",
         )
-    # Branch newer than anything we know about (e.g. a future 8.6) — assume the
-    # vendor shipped a fix there and do not cry wolf.
     return Php2ShellVerdict(
-        vulnerable=False,
-        confidence=Confidence.medium,
-        detail=f"PHP {version} is on a branch newer than the advisory; verify it carries the fix.",
+        False,
+        Confidence.medium,
+        f"PHP {version} อยู่บนสาขาใหม่กว่าประกาศ — ตรวจยืนยันว่ามีแพตช์แล้ว",
     )
 
-
-# --- CMS fingerprinting ---------------------------------------------------
 
 def detect_cms(body: str, headers: Dict[str, str]) -> Optional[str]:
     text = body[:200_000].lower()
     gen = headers.get("x-generator", "").lower()
+    cookie = headers.get("set-cookie", "").lower()
     if "wp-content" in text or "wp-includes" in text or 'content="wordpress' in text:
         return "WordPress"
     if 'content="joomla' in text or "/media/jui/" in text or "joomla" in gen:
         return "Joomla"
-    if "drupal" in gen or "drupal.settings" in text or "/sites/default/files" in text \
-            or 'content="drupal' in text:
+    if "drupal" in gen or "drupal.settings" in text or 'content="drupal' in text:
         return "Drupal"
+    if "laravel_session" in cookie or "xsrf-token" in cookie:
+        return "Laravel"
+    if "nextcloud" in text or "oc_sessionpassphrase" in cookie:
+        return "Nextcloud"
+    if "moodle" in text or "moodlesession" in cookie:
+        return "Moodle"
     return None
 
 
-# --- Rule evaluation ------------------------------------------------------
-
-_SECURITY_HEADERS = {
-    "strict-transport-security": "HSTS",
-    "content-security-policy": "Content-Security-Policy",
-    "x-frame-options": "X-Frame-Options",
-    "x-content-type-options": "X-Content-Type-Options",
-}
-
-
 def evaluate(
-    *,
-    scheme: str,
-    status_code: Optional[int],
-    headers: Dict[str, str],
-    body: str,
+    *, scheme: str, headers: Dict[str, str], body: str
 ) -> tuple[List[Finding], Optional[str], Optional[str], Optional[str]]:
-    """Run every rule against one probed service.
-
-    Returns ``(findings, php_version_str, cms, detected_server)``.
-    """
     findings: List[Finding] = []
     server = headers.get("server")
     powered_by = headers.get("x-powered-by")
-
     version = parse_php_version(server, powered_by, headers.get("x-php-version"))
     seen = php_present(server, powered_by)
     cms = detect_cms(body, headers)
+    evidence = "; ".join(
+        filter(
+            None,
+            [
+                f"Server: {server}" if server else "",
+                f"X-Powered-By: {powered_by}" if powered_by else "",
+            ],
+        )
+    )
 
-    # --- PHP2Shell ---
     verdict = assess_php2shell(version, seen)
     if verdict is not None and verdict.vulnerable:
-        sev = Severity.critical if verdict.confidence in (Confidence.confirmed, Confidence.high) else Severity.high
-        findings.append(Finding(
-            rule_id="php2shell",
-            title="PHP2Shell — unauthenticated RCE in PHP core",
-            severity=sev,
-            confidence=verdict.confidence,
-            description=(
-                "PHP2Shell is a pair of memory-safety flaws in PHP core "
-                "(CVSS 9.2) that can allow unauthenticated remote code "
-                "execution. " + verdict.detail
-            ),
-            evidence="; ".join(filter(None, [
-                f"Server: {server}" if server else "",
-                f"X-Powered-By: {powered_by}" if powered_by else "",
-            ])) or verdict.detail,
-            recommendation=(
-                "Upgrade PHP to a fixed release: 8.5.12, 8.4.27, 8.3.36 or "
-                "8.2.35 (or later within the branch). EOL branches must move to "
-                "a supported version. Until patched, apply the vendor/WAF "
-                "mitigations."
-            ),
-            cve=list(PHP2SHELL_CVES),
-        ))
+        findings.append(
+            Finding(
+                rule_id="php2shell",
+                title="PHP2Shell — unauthenticated RCE in PHP core",
+                severity=Severity.critical,
+                confidence=verdict.confidence,
+                description="PHP2Shell เป็นช่องโหว่ memory-safety ใน PHP core (CVSS 9.2) "
+                "ที่อาจทำให้รันโค้ดจากระยะไกลโดยไม่ต้องยืนยันตัวตน " + verdict.detail,
+                evidence=evidence or verdict.detail,
+                recommendation="อัปเดต PHP เป็นรุ่นที่แพตช์: 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 "
+                "หรือใหม่กว่าในสาขาเดียวกัน (สาขา EOL ให้ย้ายไปรุ่นที่รองรับ)",
+                cve=list(PHP2SHELL_CVES),
+                cvss=9.2,
+                cwe="CWE-787",
+            )
+        )
+        if version is not None and (version.major, version.minor) < PHP2SHELL_OLDEST_FIXED_BRANCH:
+            findings.append(
+                Finding(
+                    rule_id="php-eol",
+                    title=f"PHP สาขา {version.major}.{version.minor} หมดอายุการสนับสนุน (End-of-Life)",
+                    severity=Severity.high,
+                    confidence=Confidence.confirmed,
+                    description=f"PHP {version} สิ้นสุดระยะเวลาได้รับแพตช์ความปลอดภัยอย่างเป็นทางการจาก PHP Group แล้ว",
+                    evidence=evidence or f"PHP/{version}",
+                    recommendation="วางแผนย้ายระบบขึ้นเป็น PHP 8.3 (LTS) หรือ PHP 8.4 ทันที",
+                    cve=["CVE-2026-109618"],
+                    cvss=8.1,
+                    cwe="CWE-1104",
+                )
+            )
     elif verdict is not None and verdict.confidence == Confidence.low:
-        findings.append(Finding(
-            rule_id="php2shell-undetermined",
-            title="PHP present, version undisclosed — PHP2Shell status unknown",
-            severity=Severity.info,
-            confidence=Confidence.low,
-            description=(
-                "PHP is in use but the version is hidden, so PHP2Shell exposure "
-                "cannot be confirmed remotely. " + verdict.detail
-            ),
-            evidence="; ".join(filter(None, [
-                f"Server: {server}" if server else "",
-                f"X-Powered-By: {powered_by}" if powered_by else "",
-            ])),
-            recommendation=(
-                "Check the running PHP build on the host and confirm it is at a "
-                "fixed release (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 or later)."
-            ),
-            cve=list(PHP2SHELL_CVES),
-        ))
+        findings.append(
+            Finding(
+                rule_id="php-undetermined",
+                title="PHP present, version undisclosed",
+                severity=Severity.low,
+                confidence=Confidence.low,
+                description="PHP ทำงานอยู่แต่ซ่อนเวอร์ชัน ตรวจยืนยัน php2shell จากระยะไกลไม่ได้ "
+                + verdict.detail,
+                evidence=evidence,
+                recommendation="ตรวจเวอร์ชัน PHP บนเครื่องด้วยคำสั่ง php -v และยืนยันว่าอยู่ที่รุ่นที่แพตช์แล้ว",
+                cve=list(PHP2SHELL_CVES),
+                cvss=3.7,
+                cwe="CWE-200",
+            )
+        )
 
-    # --- Server version disclosure (hygiene, informational) ---
     if server and re.search(r"\d+\.\d+", server):
-        findings.append(Finding(
-            rule_id="version-disclosure",
-            title="Software version disclosed in Server header",
-            severity=Severity.low,
-            confidence=Confidence.high,
-            description="The Server header reveals specific software versions, "
-                        "aiding targeted attacks.",
-            evidence=f"Server: {server}",
-            recommendation="Suppress version tokens (e.g. ServerTokens Prod, "
-                           "expose_php=Off).",
-        ))
-
-    # --- Missing transport security (only meaningful over https-capable hosts) ---
-    if scheme == "https":
-        if "strict-transport-security" not in {k.lower() for k in headers}:
-            findings.append(Finding(
-                rule_id="missing-hsts",
-                title="HSTS not enabled",
+        findings.append(
+            Finding(
+                rule_id="version-disclosure",
+                title="เปิดเผยเวอร์ชันซอฟต์แวร์ (Server Banner Disclosure)",
                 severity=Severity.low,
                 confidence=Confidence.high,
-                description="No Strict-Transport-Security header; connections can "
-                            "be downgraded to HTTP.",
-                evidence="Strict-Transport-Security header absent",
-                recommendation="Add Strict-Transport-Security with a sane max-age.",
-            ))
+                description="Server header เปิดเผยเวอร์ชันซอฟต์แวร์ ทำให้ผู้โจมตีเลือก exploit ได้แม่นยำขึ้น",
+                evidence=f"Server: {server}",
+                recommendation="ตั้งค่าให้ซ่อนเวอร์ชัน (Apache: ServerTokens Prod, Nginx: server_tokens off, PHP: expose_php = Off)",
+                cvss=3.1,
+                cwe="CWE-200",
+            )
+        )
+
+    if scheme == "https" and "strict-transport-security" not in {
+        k.lower() for k in headers
+    }:
+        findings.append(
+            Finding(
+                rule_id="missing-hsts",
+                title="ไม่ได้เปิดใช้ HSTS (Strict-Transport-Security)",
+                severity=Severity.low,
+                confidence=Confidence.high,
+                description="ไม่มี Strict-Transport-Security header — การเชื่อมต่ออาจถูกโจมตีแบบ SSL Stripping ลดระดับเป็น HTTP",
+                evidence="ไม่พบ Strict-Transport-Security header บนพอร์ต HTTPS",
+                recommendation="เพิ่ม header Strict-Transport-Security: max-age=31536000; includeSubDomains ที่เว็บเซิร์ฟเวอร์",
+                cvss=4.3,
+                cwe="CWE-319",
+            )
+        )
 
     return findings, (str(version) if version else None), cms, server
+
+
+_ORDER = {
+    Severity.critical: 0,
+    Severity.high: 1,
+    Severity.low: 2,
+    Severity.safe: 3,
+}
+
+
+def device_severity(findings: List[Finding]) -> Severity:
+    best = Severity.safe
+    for f in findings:
+        if _ORDER[f.severity] < _ORDER[best]:
+            best = f.severity
+    return best
+
+
+def thaicert_assessment(
+    severity: Severity, has_web: bool, findings: List[Finding]
+) -> str:
+    if not has_web:
+        return "ตรวจพบการเชื่อมต่อในวง LAN · ไม่พบบริการเว็บหรือ PHP · ปลอดภัยจาก php2shell"
+    if severity == Severity.critical:
+        return "พบช่องโหว่ php2shell — ควรรีบแก้ไขโดยด่วน"
+    if severity == Severity.high:
+        return "พบความเสี่ยงระดับสูง (PHP สาขาหมดอายุ EOL) — ควรอัปเกรดทันที"
+    if severity == Severity.low:
+        f = next((x for x in findings if x.rule_id != "php2shell"), None)
+        return (
+            (f.title + " — ความเสี่ยงต่ำ ควรปรับปรุง")
+            if f
+            else "พบความเสี่ยงระดับต่ำ ควรปรับปรุง"
+        )
+    return "มีบริการเว็บ/PHP แต่ไม่พบช่องโหว่ php2shell — ผ่านเกณฑ์ ThaiCERT"

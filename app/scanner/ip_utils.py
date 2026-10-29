@@ -123,3 +123,36 @@ def iter_targets(specs: Iterable[str]) -> Iterator[str]:
         first, last = _bounds(spec)
         for value in range(first, last + 1):
             yield str(ipaddress.ip_address(value))
+
+
+def out_of_scope(
+    specs: Iterable[str], allowed: "list[ipaddress.IPv4Network]"
+) -> List[str]:
+    """Return the target specs whose range is not fully inside *allowed*.
+
+    An empty ``allowed`` means "no scope configured" and everything is rejected.
+    Checking is done on the spec's integer bounds, so it is cheap even for a
+    large CIDR.
+    """
+    if not allowed:
+        return [s for s in _active_specs(specs)]
+    bad: List[str] = []
+    for spec in _active_specs(specs):
+        first, last = _bounds(spec)
+        covered = any(
+            int(net.network_address) <= first and last <= int(net.broadcast_address)
+            for net in allowed
+        )
+        if not covered:
+            bad.append(spec)
+    return bad
+
+
+def label_targets(specs: Iterable[str]) -> str:
+    """A short human label for a target list, e.g. '10.0.0.0/22' or '3 ช่วง'."""
+    active = list(_active_specs(specs))
+    if not active:
+        return ""
+    if len(active) == 1:
+        return active[0]
+    return f"{len(active)} ช่วง"

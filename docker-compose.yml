@@ -1,27 +1,28 @@
 services:
   thscan:
     build: .
-    image: thscan:1.0.0
+    image: thscan:2.0.0
     container_name: thscan
-    ports:
-      - "8000:8000"
+    # host networking so auto-detect and scans see your real LAN (Linux hosts).
+    # On Docker Desktop (Windows/macOS) use run.bat / run.sh instead.
+    network_mode: host
     volumes:
       - thscan-data:/data
     environment:
-      # --- Discovery scope (comma-separated) -------------------------------
-      THSCAN_ALLOWED_SUFFIXES: "go.th,or.th,mi.th"
+      # --- Scope: the ONLY networks this instance may scan (deploy-time) ----
+      # Defaults to the private ranges. Set this to the subnet(s) your team is
+      # authorized to scan; anything outside it is refused by the API.
+      THSCAN_ALLOWED_CIDRS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # --- Safety rails ----------------------------------------------------
       THSCAN_MAX_TARGETS: "65536"
       THSCAN_MAX_CONCURRENCY: "50"
-      THSCAN_CONNECT_TIMEOUT: "4"
-      THSCAN_HTTP_TIMEOUT: "8"
-      THSCAN_DNS_TIMEOUT: "4"
+      THSCAN_CONNECT_TIMEOUT: "1.5"
+      THSCAN_HTTP_TIMEOUT: "6"
       THSCAN_POLITE_DELAY_MS: "0"
       THSCAN_WEB_PORTS: "80,443,8080,8443"
-      # Keep authorization gating ON for anything but an isolated lab.
-      THSCAN_REQUIRE_AUTH: "true"
-      # Optional: pin reverse-DNS resolvers, e.g. "1.1.1.1,8.8.8.8".
-      THSCAN_DNS_SERVERS: ""
+      THSCAN_LIVENESS_PORTS: "22,445,3389,53"
+      # Local time used for scheduled scans and for dates shown in the UI.
+      THSCAN_TZ: "Asia/Bangkok"
     restart: unless-stopped
 
 volumes:

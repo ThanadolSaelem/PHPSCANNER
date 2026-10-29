@@ -1,108 +1,87 @@
-"""Non-destructive HTTP(S) probing of a single web service.
-
-We issue one GET to the site root with a clearly identifying User-Agent and
-read a bounded slice of the body. No fuzzing, no path brute-forcing, no
-authentication attempts, no payloads — just what a browser's first request
-would reveal.
-"""
+"""Non-destructive HTTP(S) probing of a single web service."""
 from __future__ import annotations
 
-import re
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import httpx
 
-from ..models import ServiceResult
+from ..models import Finding
 from . import vuln_rules
 
-USER_AGENT = (
-    "thscan/1.0 (+defensive vulnerability scanner; PHP2Shell check; "
-    "non-destructive; contact your CERT)"
-)
-
-_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
-_MAX_BODY = 262_144  # 256 KiB is plenty for fingerprinting
+USER_AGENT = "thscan/2.0 (+defensive php2shell check; ThaiCERT compliance; non-destructive)"
+_MAX_BODY = 262_144
 
 
-def _title(body: str) -> Optional[str]:
-    m = _TITLE_RE.search(body)
-    if not m:
-        return None
-    return re.sub(r"\s+", " ", m.group(1)).strip()[:200] or None
+@dataclass
+class WebResult:
+    port: int
+    scheme: str
+    status_code: Optional[int] = None
+    server: Optional[str] = None
+    powered_by: Optional[str] = None
+    php_version: Optional[str] = None
+    cms: Optional[str] = None
+    findings: List[Finding] = field(default_factory=list)
+    headers: Dict[str, str] = field(default_factory=dict)
+    # Stable shape of the response, used to recognise a middlebox (proxy /
+    # firewall) that answers on behalf of every address.
+    fingerprint: str = ""
+
+
+_VOLATILE = {"date", "set-cookie", "content-length", "age", "expires", "etag", "last-modified"}
+
+
+def response_fingerprint(status: Optional[int], headers: Dict[str, str]) -> str:
+    names = sorted(h for h in headers if h not in _VOLATILE)
+    return f"{status}|{','.join(names)}|{headers.get('server', '')}"
 
 
 async def probe_service(
-    client: httpx.AsyncClient,
-    ip: str,
-    port: int,
-    hostname: Optional[str],
-) -> Optional[ServiceResult]:
-    """Probe http and https on *port*; return a result if either answers.
-
-    We always connect to the IP we discovered (never a fresh forward lookup)
-    and present the discovered hostname in the ``Host`` header so name-based
-    virtual hosts route correctly.
-    """
+    client: httpx.AsyncClient, ip: str, port: int
+) -> Optional[WebResult]:
     scheme = "https" if port in (443, 8443) else "http"
-    result = await _try(client, scheme, ip, port, hostname)
-    if result is not None:
-        return result
-    # Fall back to the other scheme on non-standard ports.
+    res = await _try(client, scheme, ip, port)
+    if res is not None:
+        return res
     if port not in (80, 443):
         other = "http" if scheme == "https" else "https"
-        return await _try(client, other, ip, port, hostname)
+        return await _try(client, other, ip, port)
     return None
 
 
 async def _try(
-    client: httpx.AsyncClient,
-    scheme: str,
-    ip: str,
-    port: int,
-    hostname: Optional[str],
-) -> Optional[ServiceResult]:
+    client: httpx.AsyncClient, scheme: str, ip: str, port: int
+) -> Optional[WebResult]:
     url = f"{scheme}://{ip}:{port}/"
-    headers = {"User-Agent": USER_AGENT}
-    # Route virtual hosts by sending the discovered name as Host, while the
-    # connection still goes to the known IP above.
-    if hostname:
-        headers["Host"] = hostname
     try:
-        resp = await client.get(url, headers=headers)
+        resp = await client.get(url, headers={"User-Agent": USER_AGENT})
     except (httpx.HTTPError, OSError):
         return None
 
     headers: Dict[str, str] = {k.lower(): v for k, v in resp.headers.items()}
     body = ""
     try:
-        raw = resp.content[:_MAX_BODY]
-        body = raw.decode(resp.encoding or "utf-8", errors="replace")
+        body = resp.content[:_MAX_BODY].decode(
+            resp.encoding or "utf-8", errors="replace"
+        )
     except (UnicodeDecodeError, LookupError, httpx.HTTPError):
         body = ""
 
     findings, php_version, cms, server = vuln_rules.evaluate(
-        scheme=scheme,
-        status_code=resp.status_code,
-        headers=headers,
-        body=body,
+        scheme=scheme, headers=headers, body=body
     )
-
-    # Human-readable URL uses the hostname; the connection above used the IP.
-    authority = hostname or ip
-    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
-    display_url = f"{scheme}://{authority}/" if default_port else f"{scheme}://{authority}:{port}/"
-
-    return ServiceResult(
+    return WebResult(
         port=port,
         scheme=scheme,
-        url=display_url,
         status_code=resp.status_code,
         server=server,
         powered_by=headers.get("x-powered-by"),
         php_version=php_version,
         cms=cms,
-        title=_title(body),
         findings=findings,
+        headers=headers,
+        fingerprint=response_fingerprint(resp.status_code, headers),
     )
 
 
@@ -110,7 +89,7 @@ def build_client(http_timeout: float, connect_timeout: float) -> httpx.AsyncClie
     timeout = httpx.Timeout(http_timeout, connect=connect_timeout)
     limits = httpx.Limits(max_connections=200, max_keepalive_connections=20)
     return httpx.AsyncClient(
-        verify=False,          # self-signed certs are common on gov appliances
+        verify=False,
         follow_redirects=True,
         max_redirects=3,
         timeout=timeout,
