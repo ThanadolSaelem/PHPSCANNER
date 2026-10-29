@@ -119,7 +119,9 @@ class Scheduler:
             if not due:
                 continue
             self._fired[item.id] = now
-            job = await self.store.create(ScanRequest(targets=item.targets, note=f"ตั้งเวลา: {item.name}"))
+            job = await self.store.create(ScanRequest(
+                targets=item.targets, note=f"ตั้งเวลา: {item.name}",
+                port_profile=item.port_profile, custom_ports=item.custom_ports))
             item.last_run = now.isoformat()
             item.last_job_id = job.id
             self.store.audit.record("schedule_fired", schedule_id=item.id, job_id=job.id)

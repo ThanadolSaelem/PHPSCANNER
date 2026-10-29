@@ -170,8 +170,14 @@ class JobStore:
             device.patched_at = now_iso
             simulated, online = True, True
         else:
+            orig = job.request
+            req = ScanRequest(
+                targets=[ip], port_profile=orig.port_profile, custom_ports=orig.custom_ports,
+                site_hosts={ip: orig.site_hosts[ip]} if ip in orig.site_hosts else {},
+                extra_web_ports=orig.extra_web_ports,
+            )
             probe = ScanJob(id="recheck-" + uuid.uuid4().hex[:6], created_at=datetime.now(timezone.utc),
-                            request=ScanRequest(targets=[ip]))
+                            request=req)
             await self.engine.run(probe, asyncio.Event())
             fresh = next((d for d in probe.devices if d.ip == ip), None)
             simulated, online = False, fresh is not None
@@ -205,6 +211,8 @@ class JobStore:
             targets=payload.targets,
             cron=payload.cron,
             enabled=payload.enabled,
+            port_profile=payload.port_profile,
+            custom_ports=payload.custom_ports,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         self._schedules[sched_id] = item

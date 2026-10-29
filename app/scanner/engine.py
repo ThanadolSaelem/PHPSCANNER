@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 from ..config import Settings
-from ..models import Device, JobState, ScanJob, Severity
-from . import demo_scenarios, discovery, dns_resolver, http_probe, port_scanner, vuln_rules
+from ..models import Device, JobState, ScanJob, ServicePort, Severity
+from . import demo_scenarios, discovery, dns_resolver, http_probe, port_scanner, ports, vuln_rules
 from .ip_utils import expand_targets, label_targets
 
 
@@ -37,6 +37,16 @@ class ScanEngine:
                 job.duration_s = round(
                     (job.finished_at - job.started_at).total_seconds(), 2
                 )
+
+    @staticmethod
+    def _label(req) -> str:
+        if req.site_hosts:
+            hosts = list(dict.fromkeys(req.site_hosts.values()))
+            ip_specs = [t for t in req.targets if t not in req.site_hosts]
+            parts = hosts[:2] + ([label_targets(ip_specs)] if ip_specs else [])
+            extra = len(hosts) - 2
+            return ", ".join(parts) + (f" และอีก {extra} เว็บ" if extra > 0 else "")
+        return label_targets(req.targets)
 
     async def _run_demo(self, job: ScanJob, cancel: asyncio.Event) -> None:
         scenario_id = job.request.demo_scenario or "gov-cert"
@@ -79,20 +89,24 @@ class ScanEngine:
             if req.polite_delay_ms is not None
             else s.polite_delay_ms
         ) / 1000.0
-        job.target_label = label_targets(req.targets)
+        job.target_label = self._label(req)
 
         ips, total = expand_targets(req.targets, s.max_targets)
         job.progress.total_ips = total
 
-        live_ports = list(dict.fromkeys(s.web_ports + s.liveness_ports))
+        web_ports = sorted(set(s.web_ports) | set(req.extra_web_ports))
+        scan_ports = ports.profile_ports(req.port_profile, req.custom_ports, web_ports)
+        job.scanned_ports = scan_ports
+        live_ports = list(dict.fromkeys(web_ports + s.liveness_ports))
         resolver = dns_resolver.ReverseResolver(timeout=1.5)
         devices: List[Device] = []
 
         async with http_probe.build_client(s.http_timeout, s.connect_timeout) as client:
             # Phase 0: is a proxy/firewall answering for every address?
-            blocked = await discovery.intercepted_ports(live_ports, s.connect_timeout)
+            check_ports = sorted(set(live_ports) | set(scan_ports))
+            blocked = await discovery.intercepted_ports(check_ports, s.connect_timeout)
             canary_fp: Dict[int, str] = {}
-            for port in sorted(p for p in blocked if p in s.web_ports):
+            for port in sorted(p for p in blocked if p in web_ports):
                 wr = await http_probe.probe_service(client, discovery.CANARY_IP, port)
                 if wr is not None:
                     canary_fp[port] = wr.fingerprint
@@ -100,6 +114,7 @@ class ScanEngine:
             clean_ports = [p for p in live_ports if p not in blocked]
 
             # Phase 1: liveness + latency
+            job.progress.phase = "liveness"
             sem = asyncio.Semaphore(concurrency)
             live: List[tuple[str, int | None, bool]] = []
 
@@ -125,26 +140,35 @@ class ScanEngine:
 
             arp = discovery.read_arp_table()
 
-            # Phase 2: web probe + assessment
+            # Phase 2: port scan + web probe + assessment on online hosts
+            job.progress.phase = "inspect"
+            job.progress.to_inspect = len(live)
             probe_sem = asyncio.Semaphore(concurrency)
 
             async def inspect(ip: str, latency: int | None, verified: bool) -> None:
                 if cancel.is_set():
                     return
+                site_host = req.site_hosts.get(ip)
                 async with probe_sem:
+                    if site_host:
+                        lookup = asyncio.sleep(0, (ip, site_host, dns_resolver.match_suffix(site_host, s.gov_suffixes)))
+                    else:
+                        lookup = resolver.resolve_and_match(ip, s.gov_suffixes)
                     open_all, (_, hostname, matched_suffix) = await asyncio.gather(
-                        port_scanner.open_ports(ip, live_ports, s.connect_timeout),
-                        resolver.resolve_and_match(ip, s.gov_suffixes),
+                        port_scanner.open_ports(ip, scan_ports, s.connect_timeout),
+                        lookup,
                     )
-                    other_open = [p for p in open_all if p not in s.web_ports and p not in blocked]
 
                     findings = []
                     web_open: List[int] = []
                     php_version = server = cms = None
                     merged_headers: Dict[str, str] = {}
                     seen_rules: set[str] = set()
-                    for port in [p for p in open_all if p in s.web_ports]:
-                        wr = await http_probe.probe_service(client, ip, port)
+                    for port in [p for p in open_all if p in web_ports]:
+                        if site_host:
+                            wr = await http_probe.probe_service(client, ip, port, host=site_host)
+                        else:
+                            wr = await http_probe.probe_service(client, ip, port)
                         if wr is None:
                             continue
                         if port in canary_fp and wr.fingerprint == canary_fp[port]:
@@ -161,14 +185,20 @@ class ScanEngine:
                                 findings.append(f)
                     if delay:
                         await asyncio.sleep(delay)
+                job.progress.inspected += 1
 
                 if not verified:
                     if not web_open:
                         return  # phantom: only the middlebox answered
                     job.progress.online += 1
 
+                # ports a middlebox answers for prove nothing; keep them only
+                # when a genuine web response came back on them
+                found = sorted({p for p in open_all if p not in blocked} | set(web_open))
+                services = [ServicePort(port=p, **ports.describe(p, web=p in web_open)) for p in found]
                 has_web = bool(web_open)
                 has_tls = any(p in (443, 8443) for p in web_open)
+                other_open = [p for p in found if p not in web_ports]
                 severity = vuln_rules.device_severity(findings) if has_web else Severity.safe
                 service = ("HTTPS" if has_tls else "HTTP") if has_web else "ไม่มีบริการเว็บ"
                 devices.append(Device(
@@ -176,7 +206,8 @@ class ScanEngine:
                     mac=arp.get(ip),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
                     service=service, php_version=php_version, server=server, cms=cms,
-                    open_ports=sorted(web_open), latency_ms=latency, severity=severity,
+                    open_ports=sorted(web_open), services=services, latency_ms=latency,
+                    severity=severity,
                     assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
                     findings=findings, headers=merged_headers,
                 ))

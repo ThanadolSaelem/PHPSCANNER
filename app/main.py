@@ -7,14 +7,14 @@ import json
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import settings
 from .models import ScanRequest, ScheduleCreate
-from .scanner import demo_scenarios, discovery
+from .scanner import demo_scenarios, discovery, netlimit, ports, sites
 from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
 from .scheduler import CronError, Scheduler, local_tz, parse_cron
 from .store import JobStore
@@ -57,6 +57,15 @@ async def get_config() -> dict:
         "allowed_cidrs": settings.allowed_cidrs,
         "gov_suffixes": settings.gov_suffixes,
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
+        "max_port_probes": settings.max_port_probes,
+        "max_custom_ports": ports.MAX_CUSTOM_PORTS,
+        "max_sites": sites.MAX_SITES,
+        "max_sockets": netlimit.MAX_SOCKETS,
+        "port_profiles": [
+            {"id": pid, "label": label,
+             "ports": ports.profile_ports(pid, "", settings.web_ports) if pid != "custom" else None}
+            for pid, label in ports.PROFILES.items()
+        ],
         "demos": demo_scenarios.DEMO_SCENARIOS,
     }
 
@@ -71,8 +80,36 @@ async def autodetect() -> dict:
     return {"subnets": discovery.autodetect_subnets()}
 
 
+async def _resolve_sites(texts: list) -> list:
+    """Parse, resolve and check each link. Returns a list of report dicts."""
+    out = []
+    for text in texts[: sites.MAX_SITES]:
+        # refused: resolvable but not allowed (wrong domain / out of scope)
+        item = {"input": text, "host": None, "ips": [], "port": None, "suffix": None,
+                "problems": [], "refused": False}
+        try:
+            site = await sites.resolve(sites.parse(text))
+            item.update(host=site.host, ips=site.ips, port=site.port)
+            item["problems"] = sites.check(site, settings.gov_suffixes, settings.allowed_networks())
+            item["suffix"] = site.suffix
+            item["refused"] = bool(item["problems"])
+        except sites.SiteError as exc:
+            item["problems"] = [str(exc)]
+        out.append(item)
+    return out
+
+
+@app.get("/api/resolve")
+async def resolve_sites(q: str = Query("", max_length=4096)) -> dict:
+    """Preview what a list of links resolves to, and whether it may be scanned."""
+    texts = [t for t in (x.strip() for x in q.replace(",", "\n").splitlines()) if t]
+    return {"sites": await _resolve_sites(texts)}
+
+
 @app.post("/api/scans")
 async def create_scan(req: ScanRequest) -> dict:
+    # fields the server owns
+    req.site_hosts, req.extra_web_ports = {}, []
     if req.demo_scenario:
         valid_ids = {d["id"] for d in demo_scenarios.DEMO_SCENARIOS}
         if req.demo_scenario not in valid_ids:
@@ -80,10 +117,28 @@ async def create_scan(req: ScanRequest) -> dict:
         scen = next(
             d for d in demo_scenarios.DEMO_SCENARIOS if d["id"] == req.demo_scenario
         )
+        req.sites = []
         if not req.targets:
             req.targets = [scen["cidr"]]
         job = await store.create(req)
         return {"id": job.id, "total_ips": scen["total_ips"], **job.summary()}
+
+    if len(req.sites) > sites.MAX_SITES:
+        raise HTTPException(400, f"ตรวจเว็บไซต์ได้ครั้งละไม่เกิน {sites.MAX_SITES} ลิงก์")
+    if req.sites:
+        report = await _resolve_sites(req.sites)
+        problems = [p for r in report for p in r["problems"]]
+        if problems:
+            raise HTTPException(403 if any(r["refused"] for r in report) else 400,
+                                " · ".join(problems))
+        for r in report:
+            for ip in r["ips"]:
+                req.site_hosts.setdefault(ip, r["host"])
+                if ip not in req.targets:
+                    req.targets.append(ip)
+            if r["port"] and r["port"] not in settings.web_ports:
+                req.extra_web_ports.append(r["port"])
+        req.extra_web_ports = sorted(set(req.extra_web_ports))
 
     if not req.targets:
         raise HTTPException(400, "ไม่ได้ระบุเป้าหมาย")
@@ -99,6 +154,17 @@ async def create_scan(req: ScanRequest) -> dict:
             + ", ".join(bad)
             + " — อนุญาตเฉพาะ: "
             + ", ".join(settings.allowed_cidrs),
+        )
+    try:
+        scan_ports = ports.profile_ports(req.port_profile, req.custom_ports,
+                                         sorted(set(settings.web_ports) | set(req.extra_web_ports)))
+    except ports.PortSpecError as exc:
+        raise HTTPException(400, str(exc))
+    if total * len(scan_ports) > settings.max_port_probes:
+        raise HTTPException(
+            400,
+            f"งานนี้ต้องตรวจ {total:,} ที่อยู่ × {len(scan_ports):,} พอร์ต ซึ่งเกินขีดจำกัด "
+            f"{settings.max_port_probes:,} ครั้ง — ลดขนาดช่วง IP หรือจำนวนพอร์ตลง",
         )
     job = await store.create(req)
     return {"id": job.id, "total_ips": total, **job.summary()}
@@ -185,6 +251,7 @@ async def export_csv(job_id: str) -> Response:
             "php_version",
             "cms",
             "open_ports",
+            "open_services",
             "latency_ms",
             "severity",
             "assessment",
@@ -203,6 +270,7 @@ async def export_csv(job_id: str) -> Response:
                 d.php_version or "",
                 d.cms or "",
                 " ".join(str(p) for p in d.open_ports),
+                " ".join(f"{x.port}/{x.name}" for x in d.services),
                 d.latency_ms if d.latency_ms is not None else "",
                 d.severity.value,
                 d.assessment,
@@ -263,6 +331,10 @@ async def create_schedule(payload: ScheduleCreate) -> dict:
     bad = out_of_scope(payload.targets, settings.allowed_networks())
     if bad:
         raise HTTPException(403, f"เป้าหมายอยู่นอกขอบเขต: {', '.join(bad)}")
+    try:
+        ports.profile_ports(payload.port_profile, payload.custom_ports, settings.web_ports)
+    except ports.PortSpecError as exc:
+        raise HTTPException(400, str(exc))
     item = store.add_schedule(payload)
     scheduler.refresh_next_runs()
     return item.dump_json_dict()

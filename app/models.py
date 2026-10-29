@@ -40,10 +40,18 @@ class JobState(str, Enum):
 
 class ScanRequest(CompatBaseModel):
     targets: List[str] = Field(default_factory=list)
+    # websites given by link/domain; resolved by the API into ``targets``
+    sites: List[str] = Field(default_factory=list)
+    # which ports to check on each online host: web | common | top100 | custom
+    port_profile: str = "common"
+    custom_ports: str = ""
     concurrency: Optional[int] = None
     polite_delay_ms: Optional[int] = None
     note: str = Field("")
     demo_scenario: Optional[str] = Field(None)
+    # set by the server, never trusted from the client
+    site_hosts: Dict[str, str] = Field(default_factory=dict)   # ip -> hostname
+    extra_web_ports: List[int] = Field(default_factory=list)   # ports named in links
 
 
 class Finding(CompatBaseModel):
@@ -59,6 +67,13 @@ class Finding(CompatBaseModel):
     cwe: Optional[str] = None
 
 
+class ServicePort(CompatBaseModel):
+    port: int
+    name: str
+    description: str = ""
+    note: Optional[str] = None
+
+
 class Device(CompatBaseModel):
     ip: str
     hostname: Optional[str] = None
@@ -70,7 +85,8 @@ class Device(CompatBaseModel):
     php_version: Optional[str] = None
     server: Optional[str] = None
     cms: Optional[str] = None
-    open_ports: List[int] = Field(default_factory=list)
+    open_ports: List[int] = Field(default_factory=list)  # web ports that answered HTTP
+    services: List[ServicePort] = Field(default_factory=list)  # every open TCP port found
     latency_ms: Optional[int] = None
     severity: Severity = Severity.safe
     assessment: str = ""
@@ -85,6 +101,9 @@ class ScanProgress(CompatBaseModel):
     probed: int = 0
     online: int = 0
     risks: int = 0
+    phase: str = ""        # liveness | inspect
+    to_inspect: int = 0    # hosts that answered liveness
+    inspected: int = 0
 
 
 class ScheduleCreate(CompatBaseModel):
@@ -92,6 +111,8 @@ class ScheduleCreate(CompatBaseModel):
     targets: List[str]
     cron: str = "0 2 * * *"
     enabled: bool = True
+    port_profile: str = "common"
+    custom_ports: str = ""
 
 
 class ScheduleItem(CompatBaseModel):
@@ -100,6 +121,8 @@ class ScheduleItem(CompatBaseModel):
     targets: List[str]
     cron: str
     enabled: bool = True
+    port_profile: str = "common"
+    custom_ports: str = ""
     created_at: str
     last_run: Optional[str] = None
     last_job_id: Optional[str] = None
@@ -121,6 +144,7 @@ class ScanJob(CompatBaseModel):
     error: Optional[str] = None
     demo_scenario: Optional[str] = None
     intercepted_ports: List[int] = Field(default_factory=list)
+    scanned_ports: List[int] = Field(default_factory=list)
 
     def security_score(self) -> int:
         if not self.devices:
@@ -170,6 +194,9 @@ class ScanJob(CompatBaseModel):
             "note": self.request.note,
             "demo_scenario": self.demo_scenario,
             "intercepted_ports": self.intercepted_ports,
+            "port_profile": self.request.port_profile,
+            "scanned_port_count": len(self.scanned_ports),
+            "sites": self.request.sites,
             "security_score": self.security_score(),
             "security_grade": self.security_grade(),
         }

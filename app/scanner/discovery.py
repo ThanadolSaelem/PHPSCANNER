@@ -8,11 +8,18 @@ import re
 import socket
 from typing import Dict, List, Optional, Tuple
 
+from . import netlimit
+
 _MAC_RE = re.compile(r"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$", re.IGNORECASE)
 _ZERO_MAC = "00:00:00:00:00:00"
 
 
 async def _probe_port(ip: str, port: int, timeout: float) -> Tuple[bool, Optional[float]]:
+    async with netlimit.slot():
+        return await _probe_port_unlimited(ip, port, timeout)
+
+
+async def _probe_port_unlimited(ip: str, port: int, timeout: float) -> Tuple[bool, Optional[float]]:
     loop = asyncio.get_running_loop()
     start = loop.time()
     try:

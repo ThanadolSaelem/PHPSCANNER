@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from ..models import Device, Severity
-from . import dns_resolver, vuln_rules
+from ..models import Device, ServicePort, Severity
+from . import dns_resolver, ports, vuln_rules
 
 DEMO_SCENARIOS: List[Dict[str, Any]] = [
     {
@@ -265,6 +265,15 @@ _RAW_HOSTS: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
+# Non-web ports each kind of demo host shows in the port list.
+_DEMO_OTHER_PORTS = {
+    "Gateway Router": [22, 53],
+    "LAN Device": [135, 139, 445, 3389],
+    "Web Server (HTTP)": [22, 3306],
+    "Web Server (HTTPS)": [22],
+}
+
+
 def build_demo_devices(scenario_id: str, suffixes: List[str]) -> List[Device]:
     raw_list = _RAW_HOSTS.get(scenario_id, _RAW_HOSTS["gov-cert"])
     devices: List[Device] = []
@@ -304,6 +313,11 @@ def build_demo_devices(scenario_id: str, suffixes: List[str]) -> List[Device]:
                 server=server,
                 cms=cms,
                 open_ports=sorted(open_ports),
+                services=[
+                    ServicePort(port=p, **ports.describe(p))
+                    for p in sorted(set(open_ports) | set(item.get(
+                        "other_ports", _DEMO_OTHER_PORTS.get(item.get("device_type", ""), []))))
+                ],
                 latency_ms=item.get("latency_ms", 2),
                 severity=severity,
                 assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
