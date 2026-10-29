@@ -201,3 +201,42 @@ async def test_engine_scans_site_by_host_and_lists_services(monkeypatch, tmp_pat
     assert [x.port for x in d.services] == [22, 443, 3306]  # 3128 was the proxy
     assert d.services[2].name == "MySQL" and d.services[2].note
     assert job.target_label == "web.agency.go.th"
+
+
+async def test_host_found_when_only_a_profile_port_is_open(monkeypatch, tmp_path):
+    # a box whose only open port is MySQL (3306) — not a web/liveness port —
+    # must still be discovered when 3306 is in the chosen port profile.
+    from app.config import Settings
+    from app.scanner import discovery, engine as eng, port_scanner
+
+    OPEN = {"10.0.0.5": {3306}}
+
+    async def fake_intercepted(ports_, timeout, canary=discovery.CANARY_IP):
+        return set()
+
+    async def fake_alive(ip, ports_, timeout):
+        hit = OPEN.get(ip, set()) & set(ports_)
+        return bool(hit), (5 if hit else None)
+
+    async def fake_open(ip, ports_, timeout):
+        return sorted(OPEN.get(ip, set()) & set(ports_))
+
+    async def fake_probe(client, ip, port, host=None):
+        return None  # 3306 is not a web service
+
+    monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
+    monkeypatch.setattr(discovery, "alive_latency", fake_alive)
+    monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(port_scanner, "open_ports", fake_open)
+    monkeypatch.setattr(http_probe, "probe_service", fake_probe)
+
+    s = Settings(); s.web_ports = [80]; s.liveness_ports = [22]; s.data_dir = str(tmp_path)
+    req = ScanRequest(targets=["10.0.0.5"], port_profile="custom", custom_ports="3306")
+    job = ScanJob(id="t2", created_at=datetime.now(timezone.utc), request=req)
+    await eng.ScanEngine(s).run(job, asyncio.Event())
+
+    assert job.state.value == "completed", job.error
+    assert [d.ip for d in job.devices] == ["10.0.0.5"]
+    (d,) = job.devices
+    assert [x.port for x in d.services] == [3306] and d.services[0].name == "MySQL"
+    assert d.severity.value == "safe"  # an open port is not a vulnerability

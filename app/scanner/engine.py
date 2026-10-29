@@ -97,7 +97,12 @@ class ScanEngine:
         web_ports = sorted(set(s.web_ports) | set(req.extra_web_ports))
         scan_ports = ports.profile_ports(req.port_profile, req.custom_ports, web_ports)
         job.scanned_ports = scan_ports
-        live_ports = list(dict.fromkeys(web_ports + s.liveness_ports))
+        # A host counts as "online" if ANY port we're going to scan answers, so
+        # the chosen port profile actually finds hosts (e.g. a box whose only
+        # open port is MySQL/3306) instead of only adding detail to hosts that
+        # already answered on a web/standard port. Liveness and the port scan
+        # run over the same set.
+        live_ports = list(dict.fromkeys(scan_ports + s.liveness_ports))
         resolver = dns_resolver.ReverseResolver(timeout=1.5)
         devices: List[Device] = []
 
