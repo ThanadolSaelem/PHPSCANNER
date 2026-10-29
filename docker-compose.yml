@@ -3,8 +3,9 @@ services:
     build: .
     image: thscan:1.0.0
     container_name: thscan
-    ports:
-      - "8000:8000"
+    # host networking so auto-detect and scans see your real LAN (Linux hosts).
+    # On Docker Desktop (Windows/macOS) use run.bat / run.sh instead.
+    network_mode: host
     volumes:
       - thscan-data:/data
     environment:

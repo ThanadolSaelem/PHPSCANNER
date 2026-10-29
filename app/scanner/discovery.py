@@ -43,9 +43,26 @@ async def _probe_port(ip: str, port: int, timeout: float) -> Tuple[bool, Optiona
         return False, None
 
 
+# A documentation address (RFC 5737 TEST-NET-2) that can never be a real host.
+# Anything that answers for it is a middlebox answering for every address.
+CANARY_IP = "198.51.100.1"
+
+
+async def intercepted_ports(ports: List[int], timeout: float,
+                            canary: str = CANARY_IP) -> set:
+    """Ports on which *something* answers for an address that cannot exist."""
+    results = await asyncio.gather(*(_probe_port(canary, p, timeout) for p in ports))
+    return {p for p, (ok, _) in zip(ports, results) if ok}
+
+
 async def alive_latency(ip: str, ports: List[int], timeout: float
                         ) -> Tuple[bool, Optional[int]]:
-    """Is *ip* up, and what is the lowest round-trip latency (ms)?"""
+    """Is *ip* up, and what is the lowest round-trip latency (ms)?
+
+    *ports* should already exclude intercepted ports (see intercepted_ports).
+    """
+    if not ports:
+        return False, None
     results = await asyncio.gather(*(_probe_port(ip, p, timeout) for p in ports))
     rtts = [rtt for ok, rtt in results if ok and rtt is not None]
     up = any(ok for ok, _ in results)
@@ -66,6 +83,29 @@ def read_arp_table() -> Dict[str, str]:
                         table[ip] = mac
     except (OSError, StopIteration):
         pass
+    if not table:
+        table = _arp_command_table()
+    return table
+
+
+_ARP_LINE = re.compile(
+    r"(\d{1,3}(?:\.\d{1,3}){3})\D+?((?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2})", re.IGNORECASE)
+
+
+def _arp_command_table() -> Dict[str, str]:
+    """Fallback for Windows/macOS: parse ``arp -a`` (fixed args, no user input)."""
+    import subprocess
+    try:
+        out = subprocess.run(["arp", "-a"], capture_output=True, text=True,
+                             timeout=5, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    table: Dict[str, str] = {}
+    for ip, mac in _ARP_LINE.findall(out):
+        parts = re.split(r"[:-]", mac.lower())
+        norm = ":".join(p.zfill(2) for p in parts)
+        if norm != _ZERO_MAC and norm != "ff:ff:ff:ff:ff:ff":
+            table[ip] = norm
     return table
 
 

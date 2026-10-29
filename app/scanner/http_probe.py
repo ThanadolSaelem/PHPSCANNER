@@ -30,6 +30,17 @@ class WebResult:
     php_version: Optional[str] = None
     cms: Optional[str] = None
     findings: List[Finding] = field(default_factory=list)
+    # Stable shape of the response, used to recognise a middlebox (proxy /
+    # firewall) that answers on behalf of every address.
+    fingerprint: str = ""
+
+
+_VOLATILE = {"date", "set-cookie", "content-length", "age", "expires", "etag", "last-modified"}
+
+
+def response_fingerprint(status: Optional[int], headers: Dict[str, str]) -> str:
+    names = sorted(h for h in headers if h not in _VOLATILE)
+    return f"{status}|{','.join(names)}|{headers.get('server', '')}"
 
 
 async def probe_service(client: httpx.AsyncClient, ip: str, port: int) -> Optional[WebResult]:
@@ -64,6 +75,7 @@ async def _try(client: httpx.AsyncClient, scheme: str, ip: str, port: int) -> Op
         port=port, scheme=scheme, status_code=resp.status_code,
         server=server, powered_by=headers.get("x-powered-by"),
         php_version=php_version, cms=cms, findings=findings,
+        fingerprint=response_fingerprint(resp.status_code, headers),
     )
 
 

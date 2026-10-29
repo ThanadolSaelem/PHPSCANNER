@@ -50,3 +50,11 @@ def test_empty_scope_rejects_everything():
 def test_label_targets():
     assert label_targets(["10.0.0.0/22"]) == "10.0.0.0/22"
     assert label_targets(["10.0.0.0/24", "10.0.1.0/24"]) == "2 ช่วง"
+
+
+def test_arp_line_parser_windows_and_mac():
+    sample = ("  192.168.1.1          00-11-22-33-44-55     dynamic\n"
+              "? (192.168.1.7) at 0:1b:2c:3:4d:5e on en0\n"
+              "  192.168.1.255        ff-ff-ff-ff-ff-ff     static\n")
+    found = {ip: mac for ip, mac in discovery._ARP_LINE.findall(sample)}
+    assert "192.168.1.1" in found and "192.168.1.7" in found

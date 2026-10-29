@@ -153,3 +153,5 @@ img{ max-width:100%; }
 .step{ display:inline-flex; align-items:center; gap:9px; font-size:13.5px; color:var(--ink); background:var(--paper); border:1px solid var(--line); padding:11px 20px; border-radius:999px; box-shadow:var(--shadow-sm); font-weight:600; }
 .linewrap{ width:min(460px,86vw); } .linebar{ height:7px; background:var(--g200); border-radius:999px; overflow:hidden; } .linebar i{ display:block; height:100%; width:0; background:var(--brand); border-radius:999px; transition:width .3s linear; }
 .lineinfo{ display:flex; justify-content:space-between; font-size:12px; color:var(--g500); margin-top:8px; } .lineinfo b{ font-family:var(--font-mono); color:var(--ink); }
+
+.intercept-note{ margin:12px 22px 0; padding:10px 14px; border-radius:var(--r-sm); background:var(--warn-bg); border:1px solid var(--warn-line); color:#7a4d0a; font-size:12.5px; }

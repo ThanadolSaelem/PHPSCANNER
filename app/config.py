@@ -64,7 +64,11 @@ class Settings:
         ]
     )
 
-    data_dir: str = os.environ.get("THSCAN_DATA_DIR", "/data")
+    # Local runs keep data next to the project; the Docker image sets /data.
+    data_dir: str = os.environ.get(
+        "THSCAN_DATA_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"),
+    )
 
     # --- helpers ---------------------------------------------------------
     def allowed_networks(self) -> List[ipaddress.IPv4Network]:

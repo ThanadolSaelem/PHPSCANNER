@@ -91,6 +91,7 @@ class ScanJob(BaseModel):
     devices: List[Device] = Field(default_factory=list)
     duration_s: Optional[float] = None
     workers: int = 0
+    intercepted_ports: List[int] = Field(default_factory=list)
     error: Optional[str] = None
 
     def summary(self) -> Dict:
@@ -113,5 +114,6 @@ class ScanJob(BaseModel):
             "target_label": self.target_label,
             "duration_s": self.duration_s,
             "workers": self.workers,
+            "intercepted_ports": self.intercepted_ports,
             "note": self.request.note,
         }

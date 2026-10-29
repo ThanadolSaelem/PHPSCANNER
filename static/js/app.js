@@ -157,6 +157,7 @@ const Results = (() => {
       list.appendChild(el);
     });
     $("#emptyRow").hidden = rows.length > 0;
+    $("#emptyRow").textContent = devices.length ? "ไม่พบอุปกรณ์ที่ตรงกับตัวกรอง" : "ไม่พบอุปกรณ์ออนไลน์ในช่วงที่สแกน";
     $("#showing").textContent = "แสดง " + rows.length + " / " + c.all + " อุปกรณ์";
     detail();
   }
@@ -207,6 +208,9 @@ const Results = (() => {
       $("#resDur").textContent = job.duration_s != null ? job.duration_s : "—";
       $("#resWorkers").textContent = job.workers || "—";
       $("#resBar").style.width = "100%";
+      const ip = job.intercepted_ports || [], note = $("#interceptNote");
+      note.hidden = !ip.length;
+      if (ip.length) note.innerHTML = "ⓘ ตรวจพบอุปกรณ์กลาง (proxy/firewall) ที่ตอบแทนทุก IP บนพอร์ต <b>" + esc(ip.join(", ")) + "</b> — ระบบกรองผลปลอมจากอุปกรณ์นี้ออกแล้ว แสดงเฉพาะเครื่องที่ตอบจริง";
       render();
     }
   };
