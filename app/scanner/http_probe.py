@@ -1,13 +1,6 @@
-"""Non-destructive HTTP(S) probing of a single web service.
-
-We issue one GET to the site root with an identifying User-Agent and read a
-bounded slice of the body. No fuzzing, no path brute-forcing, no auth attempts,
-no payloads — just what a browser's first request would reveal. We always
-connect to the IP we discovered (never a fresh DNS lookup).
-"""
+"""Non-destructive HTTP(S) probing of a single web service."""
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -16,7 +9,7 @@ import httpx
 from ..models import Finding
 from . import vuln_rules
 
-USER_AGENT = ("thscan/2.0 (+defensive php2shell check; non-destructive)")
+USER_AGENT = "thscan/2.0 (+defensive php2shell check; ThaiCERT compliance; non-destructive)"
 _MAX_BODY = 262_144
 
 
@@ -30,6 +23,7 @@ class WebResult:
     php_version: Optional[str] = None
     cms: Optional[str] = None
     findings: List[Finding] = field(default_factory=list)
+    headers: Dict[str, str] = field(default_factory=dict)
     # Stable shape of the response, used to recognise a middlebox (proxy /
     # firewall) that answers on behalf of every address.
     fingerprint: str = ""
@@ -43,8 +37,9 @@ def response_fingerprint(status: Optional[int], headers: Dict[str, str]) -> str:
     return f"{status}|{','.join(names)}|{headers.get('server', '')}"
 
 
-async def probe_service(client: httpx.AsyncClient, ip: str, port: int) -> Optional[WebResult]:
-    """Probe http/https on *port*; return a WebResult if either answers."""
+async def probe_service(
+    client: httpx.AsyncClient, ip: str, port: int
+) -> Optional[WebResult]:
     scheme = "https" if port in (443, 8443) else "http"
     res = await _try(client, scheme, ip, port)
     if res is not None:
@@ -55,7 +50,9 @@ async def probe_service(client: httpx.AsyncClient, ip: str, port: int) -> Option
     return None
 
 
-async def _try(client: httpx.AsyncClient, scheme: str, ip: str, port: int) -> Optional[WebResult]:
+async def _try(
+    client: httpx.AsyncClient, scheme: str, ip: str, port: int
+) -> Optional[WebResult]:
     url = f"{scheme}://{ip}:{port}/"
     try:
         resp = await client.get(url, headers={"User-Agent": USER_AGENT})
@@ -65,16 +62,25 @@ async def _try(client: httpx.AsyncClient, scheme: str, ip: str, port: int) -> Op
     headers: Dict[str, str] = {k.lower(): v for k, v in resp.headers.items()}
     body = ""
     try:
-        body = resp.content[:_MAX_BODY].decode(resp.encoding or "utf-8", errors="replace")
+        body = resp.content[:_MAX_BODY].decode(
+            resp.encoding or "utf-8", errors="replace"
+        )
     except (UnicodeDecodeError, LookupError, httpx.HTTPError):
         body = ""
 
     findings, php_version, cms, server = vuln_rules.evaluate(
-        scheme=scheme, headers=headers, body=body)
+        scheme=scheme, headers=headers, body=body
+    )
     return WebResult(
-        port=port, scheme=scheme, status_code=resp.status_code,
-        server=server, powered_by=headers.get("x-powered-by"),
-        php_version=php_version, cms=cms, findings=findings,
+        port=port,
+        scheme=scheme,
+        status_code=resp.status_code,
+        server=server,
+        powered_by=headers.get("x-powered-by"),
+        php_version=php_version,
+        cms=cms,
+        findings=findings,
+        headers=headers,
         fingerprint=response_fingerprint(resp.status_code, headers),
     )
 
@@ -83,6 +89,10 @@ def build_client(http_timeout: float, connect_timeout: float) -> httpx.AsyncClie
     timeout = httpx.Timeout(http_timeout, connect=connect_timeout)
     limits = httpx.Limits(max_connections=200, max_keepalive_connections=20)
     return httpx.AsyncClient(
-        verify=False, follow_redirects=True, max_redirects=3,
-        timeout=timeout, limits=limits, trust_env=False,
+        verify=False,
+        follow_redirects=True,
+        max_redirects=3,
+        timeout=timeout,
+        limits=limits,
+        trust_env=False,
     )

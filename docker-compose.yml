@@ -1,7 +1,7 @@
 services:
   thscan:
     build: .
-    image: thscan:1.0.0
+    image: thscan:2.0.0
     container_name: thscan
     # host networking so auto-detect and scans see your real LAN (Linux hosts).
     # On Docker Desktop (Windows/macOS) use run.bat / run.sh instead.
@@ -21,6 +21,8 @@ services:
       THSCAN_POLITE_DELAY_MS: "0"
       THSCAN_WEB_PORTS: "80,443,8080,8443"
       THSCAN_LIVENESS_PORTS: "22,445,3389,53"
+      # Local time used for scheduled scans and for dates shown in the UI.
+      THSCAN_TZ: "Asia/Bangkok"
     restart: unless-stopped
 
 volumes:

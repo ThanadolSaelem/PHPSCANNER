@@ -1,193 +1,80 @@
 <!doctype html>
 <html lang="th">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>thscan — เครื่องสแกนช่องโหว่เครือข่าย</title>
-<link rel="stylesheet" href="/static/css/styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="thscan — ตรวจเว็บและ PHP ในเครือข่ายของหน่วยงานว่าเสี่ยงช่องโหว่ PHP2Shell หรือไม่ ใช้ฟรี ติดตั้งเอง ไม่ทำลายระบบ">
+  <title>thscan · ตรวจช่องโหว่ PHP2Shell</title>
+  <link rel="preload" href="/static/fonts/anuphan-thai.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231B4FE4'/%3E%3Cpath d='M16 7l8 3v6c0 4.6-3.3 8.3-8 9.5-4.7-1.2-8-4.9-8-9.5v-6z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
-<header class="appbar"><div class="appbar-in">
-  <span class="logo">thscan</span>
-  <nav class="appnav" id="appnav">
-    <a class="navlink active" data-view="scan">สแกน</a>
-    <a class="navlink" data-view="results">ผลการสแกน</a>
-    <a class="navlink" data-view="profile">โปรไฟล์</a>
-  </nav>
-  <span class="freepill">ใช้งานฟรี</span>
-</div></header>
+  <!-- icon sprite (stroke icons, 24px grid) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.6-3.3 8.3-8 9.5C7.3 20.3 4 16.6 4 12V6z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.6 2.5L16 9.5"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.01"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+      <symbol id="i-table" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M10 10v9"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5v.01M8 16.5v.01"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4.5 6v.01M4.5 12v.01M4.5 18v.01"/></symbol>
+      <symbol id="i-print" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="8" rx="2"/><path d="M7 14h10v6H7z"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l5 3.5-5 3.5z"/></symbol>
+    </defs>
+  </svg>
 
-<!-- SCAN -->
-<main class="page narrow view" id="view-scan">
-  <div class="card">
-    <div class="chead">
-      <h1>เลือกช่วงเป้าหมายที่จะสแกน<span class="tip" data-tip="ระบุว่าจะให้ระบบไปตรวจหาอุปกรณ์ในช่วงหมายเลข IP ไหน — เลือกวิธีที่สะดวกที่สุด" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></h1>
-      <p>เลือกวิธีที่สะดวก — ระบบคำนวณช่วงและตรวจความถูกต้องให้อัตโนมัติ</p>
+  <a class="sr-only" href="#app">ข้ามไปเนื้อหาหลัก</a>
+
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="#/" aria-label="thscan หน้าแรก">
+        <span class="brand-mark"><svg aria-hidden="true"><use href="#i-shield"/></svg></span>
+        thscan
+      </a>
+      <nav class="nav" id="nav" aria-label="เมนูหลัก">
+        <a href="#/latest" data-nav="results">ผลการสแกนล่าสุด</a>
+        <a href="#/history" data-nav="history">ประวัติ</a>
+        <a href="#/settings" data-nav="settings">ตั้งเวลาและการตั้งค่า</a>
+      </nav>
+      <a class="btn btn-primary header-cta" href="#/" data-start>สแกนใหม่</a>
+      <button class="nav-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="เปิดเมนู">
+        <svg aria-hidden="true"><use href="#i-menu"/></svg>
+      </button>
     </div>
-    <div class="cbody">
-      <div class="modes" id="modes">
-        <button class="mode" data-mode="auto" aria-pressed="true"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M5 12a7 7 0 0114 0M2 9a11 11 0 0120 0"/></svg></span><b>วง LAN อัตโนมัติ</b><small>แนะนำ · ไม่ต้องพิมพ์</small></button>
-        <button class="mode" data-mode="cidr" aria-pressed="false"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg></span><b>ซับเน็ต</b><small>CIDR</small></button>
-        <button class="mode" data-mode="range" aria-pressed="false"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16M4 12l4-4M4 12l4 4M20 12l-4-4M20 12l-4 4"/></svg></span><b>ช่วง IP</b><small>เริ่ม–สิ้นสุด</small></button>
-        <button class="mode" data-mode="single" aria-pressed="false"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg></span><b>IP เดียว</b><small>เครื่องเดียว</small></button>
-      </div>
+  </header>
 
-      <div class="pane" id="pane-auto">
-        <p class="hint">เลือกการ์ดเครือข่ายของเครื่องนี้ — ระบบเติมช่วงให้อัตโนมัติ<span class="tip" data-tip="ระบบอ่านวงเครือข่ายจากการ์ดแลนของเครื่องที่ติดตั้ง thscan เอง จึงไม่ต้องกรอกเลขใด ๆ" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></p>
-        <div id="nicList"><div class="hint">กำลังอ่านเครือข่าย…</div></div>
-      </div>
+  <main id="app" tabindex="-1">
+    <noscript>
+      <div class="wrap section"><p>thscan ต้องเปิด JavaScript ในเบราว์เซอร์จึงจะใช้งานได้</p></div>
+    </noscript>
+  </main>
 
-      <div class="pane hide" id="pane-cidr">
-        <p class="hint">กรอกเลขแต่ละช่อง (0–255) แล้วเลือกขนาดซับเน็ต</p>
-        <div class="iprow">
-          <div class="octet-group">
-            <span class="oct"><input class="o" data-g="cidr" data-i="0" inputmode="numeric" maxlength="3" value="192"><span class="lbl">ส่วนที่ 1</span></span><span class="dot">.</span>
-            <span class="oct"><input class="o" data-g="cidr" data-i="1" inputmode="numeric" maxlength="3" value="168"><span class="lbl">ส่วนที่ 2</span></span><span class="dot">.</span>
-            <span class="oct"><input class="o" data-g="cidr" data-i="2" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 3</span></span><span class="dot">.</span>
-            <span class="oct"><input class="o" data-g="cidr" data-i="3" inputmode="numeric" maxlength="3" value="0"><span class="lbl">ส่วนที่ 4</span></span>
-          </div>
-          <span class="slash">/</span>
-          <div class="subnet"><label>ซับเน็ต<span class="tip" data-tip="ซับเน็ต (CIDR) บอกขนาดวงเครือข่าย — ตัวเลขยิ่งน้อยยิ่งครอบคลุมหลายเครื่อง เช่น /24 = 254 เครื่อง, /22 = 1,022 เครื่อง" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></label>
-            <select id="cidr-prefix"><option value="30">/30 · 2</option><option value="29">/29 · 6</option><option value="28">/28 · 14</option><option value="27">/27 · 30</option><option value="26">/26 · 62</option><option value="25">/25 · 126</option><option value="24" selected>/24 · 254</option><option value="23">/23 · 510</option><option value="22">/22 · 1,022</option><option value="20">/20 · 4,094</option><option value="16">/16 · 65,534</option></select>
-          </div>
-        </div>
-        <div class="presets" id="cidr-presets">
-          <button class="preset" data-fill="192.168.1.0/24">192.168.1.0/24<span class="ptag">บ้าน/ออฟฟิศ</span></button>
-          <button class="preset" data-fill="10.0.0.0/24">10.0.0.0/24<span class="ptag">ทั่วไป</span></button>
-          <button class="preset" data-fill="172.16.0.0/24">172.16.0.0/24<span class="ptag">องค์กร</span></button>
-        </div>
-      </div>
-
-      <div class="pane hide" id="pane-range">
-        <p class="hint">กรอกวงเครือข่าย แล้วเลือกเลขเริ่มต้นถึงสิ้นสุด (ส่วนสุดท้าย)</p>
-        <div class="iprow">
-          <div class="octet-group">
-            <span class="oct"><input class="o" data-g="range" data-i="0" inputmode="numeric" maxlength="3" value="192"><span class="lbl">ส่วนที่ 1</span></span><span class="dot">.</span>
-            <span class="oct"><input class="o" data-g="range" data-i="1" inputmode="numeric" maxlength="3" value="168"><span class="lbl">ส่วนที่ 2</span></span><span class="dot">.</span>
-            <span class="oct"><input class="o" data-g="range" data-i="2" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 3</span></span>
-          </div>
-          <span class="dot">.</span>
-          <div class="octet-group">
-            <span class="oct"><input class="o" data-g="range" data-i="3" inputmode="numeric" maxlength="3" value="1"><span class="lbl">เริ่ม</span></span><span class="rng-sep">–</span>
-            <span class="oct"><input class="o" data-g="range" data-i="4" inputmode="numeric" maxlength="3" value="50"><span class="lbl">สิ้นสุด</span></span>
-          </div>
-        </div>
-      </div>
-
-      <div class="pane hide" id="pane-single">
-        <p class="hint">กรอก IP ของเครื่องที่ต้องการตรวจเพียงเครื่องเดียว</p>
-        <div class="iprow"><div class="octet-group">
-          <span class="oct"><input class="o" data-g="single" data-i="0" inputmode="numeric" maxlength="3" value="192"><span class="lbl">ส่วนที่ 1</span></span><span class="dot">.</span>
-          <span class="oct"><input class="o" data-g="single" data-i="1" inputmode="numeric" maxlength="3" value="168"><span class="lbl">ส่วนที่ 2</span></span><span class="dot">.</span>
-          <span class="oct"><input class="o" data-g="single" data-i="2" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 3</span></span><span class="dot">.</span>
-          <span class="oct"><input class="o" data-g="single" data-i="3" inputmode="numeric" maxlength="3" value="1"><span class="lbl">ส่วนที่ 4</span></span>
-        </div></div>
-      </div>
-
-      <div class="summary ok" id="summary">
-        <div class="line1"><span class="sbadge" id="sumBadge">✓ พร้อมสแกน</span><span class="range" id="sumRange">—</span></div>
-        <div class="smeta"><span>จำนวนเป้าหมาย: <b id="sumCount">—</b></span><span>ประเภท: <b id="sumScope">—</b></span><span>เวลาโดยประมาณ: <b id="sumTime">—</b></span></div>
-        <div class="smsg" id="sumMsg"></div>
-      </div>
-
-      <div class="seccard">
-        <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg> การตรวจสอบความปลอดภัยของอินพุต<span class="tip" data-tip="ก่อนยิงสัญญาณตรวจ ทุกค่าที่กรอกจะถูกตรวจทั้งฝั่งหน้าเว็บและฝั่งเซิร์ฟเวอร์" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></h3>
-        <ul class="seclist">
-          <li><span class="ck">✓</span> ตรวจค่าตัวเลข 0–255 และรูปแบบ IPv4 ที่ฝั่งเซิร์ฟเวอร์</li>
-          <li><span class="ck">✓</span> จำกัดจำนวนเป้าหมายสูงสุด กันสแกนช่วงใหญ่เกิน</li>
-          <li><span class="ck">✓</span> สแกนได้เฉพาะช่วงที่อยู่ใน scope ที่ผู้ดูแลตั้งไว้ตอน deploy</li>
-          <li><span class="ck">✓</span> ค่าที่กรอกไม่ถูกส่งเข้า shell — กันการฝังคำสั่ง</li>
-          <li><span class="ck">✓</span> การยิงสัญญาณเป็น TCP connect แบบไม่ทำลาย</li>
-          <li><span class="ck">✓</span> มี timeout และบันทึก audit log ทุกการสแกน</li>
-        </ul>
-      </div>
-
-      <div class="cfoot"><button class="btn pri big" id="startBtn">เริ่มสแกน</button><span class="cnt" id="footCnt"></span></div>
-      <div class="err" id="scanErr"></div>
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>thscan <span id="ver"></span> · โอเพนซอร์ส ใช้ฟรี · ติดตั้งและดูแลโดยหน่วยงานของคุณเอง</span>
+      <span>ใช้ตรวจเฉพาะเครือข่ายที่หน่วยงานของคุณดูแลเท่านั้น</span>
     </div>
-  </div>
-</main>
+  </footer>
 
-<!-- SCANNING -->
-<main class="page view hidden" id="view-scanning">
-  <div class="scanstage">
-    <div class="cap-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg> กำลังสแกน · <span id="scanScope">—</span></div>
-    <div class="ring-wrap">
-      <div class="dotring"></div>
-      <svg class="svg-ring" viewBox="0 0 228 228"><defs><linearGradient id="grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5cf4"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs><circle class="track" cx="114" cy="114" r="104"/><circle class="bar" id="arc" cx="114" cy="114" r="104"/></svg>
-      <div class="orb" id="orb"><div class="pct" id="pct">0%</div></div>
-    </div>
-    <div class="step"><span style="color:var(--brand-solid)">⚡</span> <span id="stepTxt">กำลังเริ่มต้น…</span></div>
-    <div class="linewrap"><div class="linebar"><i id="line"></i></div><div class="lineinfo"><span>ตรวจแล้ว <b id="probed">0</b> / <b id="totalN">0</b></span><span>ออนไลน์ <b id="onlineN">0</b> · เสี่ยง <b id="riskN">0</b></span></div></div>
-    <button class="btn ghost sm" id="cancelBtn">หยุดสแกน</button>
-  </div>
-</main>
-
-<!-- RESULTS -->
-<main class="page view hidden" id="view-results">
-  <div class="panel">
-    <div class="phead">
-      <div class="shield"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
-      <div><h1>ผลการสแกนเครือข่าย</h1><p>ตรวจอุปกรณ์จากเครือข่ายและคัดกรองความปลอดภัย PHP ตามเกณฑ์ ThaiCERT</p></div>
-      <div class="sp"></div>
-      <span class="target-chip" id="resTarget">—</span>
-      <button class="btn ghost sm" id="rescan">⟳ สแกนใหม่</button>
-      <button class="btn pri sm" id="exportBtn">⤓ Export CSV</button>
-    </div>
-    <div class="progress-bar"><i id="resBar"></i></div>
-    <div class="triage" id="triage"></div>
-    <div class="intercept-note" id="interceptNote" hidden></div>
-    <div class="toolbar">
-      <div class="seg" id="cats">
-        <button data-cat="all" aria-pressed="true">ทั้งหมด <span class="n" id="c-all">0</span></button>
-        <button class="risk" data-cat="risk" aria-pressed="false">ต้องดำเนินการ <span class="n" id="c-risk">0</span></button>
-        <button data-cat="php" aria-pressed="false">เซิร์ฟเวอร์ PHP <span class="n" id="c-php">0</span></button>
-        <button data-cat="client" aria-pressed="false">อุปกรณ์ทั่วไป <span class="n" id="c-client">0</span></button>
-      </div>
-      <div class="sp" style="flex:1"></div>
-      <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input id="search" placeholder="ค้นหา IP / บริการ / MAC …"></div>
-      <button class="adv-toggle" id="advToggle" aria-expanded="false">ตัวกรองขั้นสูง <span class="chev">▾</span></button>
-    </div>
-    <div class="adv-panel" id="advPanel">
-      <div class="adv-grid">
-        <div><label>ระดับความรุนแรง</label><select id="f-sev"><option value="all">ทั้งหมด</option><option value="critical">ร้ายแรงมาก</option><option value="low">ความเสี่ยงต่ำ</option><option value="safe">ปลอดภัย</option></select></div>
-        <div><label>บริการเว็บ</label><select id="f-svc"><option value="all">ทั้งหมด</option><option value="web">มีบริการเว็บ/PHP</option><option value="none">ไม่มีบริการเว็บ</option></select></div>
-        <div><label>พอร์ตที่เปิด</label><select id="f-port"><option value="all">ทั้งหมด</option><option value="open">มีพอร์ตเปิด</option><option value="closed">ไม่มีพอร์ตเปิด</option></select></div>
-        <div><label>Latency ไม่เกิน (ms)</label><input id="f-lat" type="number" min="0" placeholder="เช่น 20"></div>
-      </div>
-      <div class="adv-actions"><button class="btn pri sm" id="advApply">ใช้ตัวกรอง</button><button class="btn ghost sm" id="advReset">ล้างตัวกรอง</button></div>
-    </div>
-    <div class="split">
-      <div class="listcol"><div class="listhead">อุปกรณ์ · เรียงความเสี่ยงก่อน</div><div id="list"></div><div class="empty" id="emptyRow" hidden>ไม่พบอุปกรณ์ที่ตรงกับตัวกรอง</div></div>
-      <div class="detail" id="detail"></div>
-    </div>
-    <div class="pfoot"><span class="lead"><span class="g"></span> เสร็จใน <b style="margin:0 3px" id="resDur">—</b> วินาที <span style="color:var(--g400)">(Workers: <span id="resWorkers">—</span>)</span></span><span class="sp"></span><span style="font-size:12px;color:var(--g500)" id="showing"></span></div>
-  </div>
-</main>
-
-<!-- PROFILE -->
-<main class="page mid view hidden" id="view-profile">
-  <div class="panel">
-    <div class="prof-head"><div class="avatar">N</div><div><b>ผู้ดูแลระบบ</b><small>ขอบเขต (scope) ที่อนุญาต: <span id="profScope" class="mono" style="margin-left:4px">—</span><span class="tip" data-tip="ขอบเขตการสแกนถูกกำหนดตอนติดตั้ง (deploy) ด้วย THSCAN_ALLOWED_CIDRS — thscan สแกนได้เฉพาะช่วงนี้" tabindex="0" role="img" aria-label="ข้อมูลเพิ่มเติม">ⓘ</span></small></div></div>
-    <div class="pcards">
-      <div class="pcard"><div class="cap">จำนวนเป้าหมายสูงสุด</div><div class="v" id="profMax">—</div></div>
-      <div class="pcard"><div class="cap">Workers สูงสุด</div><div class="v" id="profWorkers">—</div></div>
-      <div class="pcard"><div class="cap">พอร์ตเว็บที่ตรวจ</div><div class="v mono" style="font-size:14px" id="profPorts">—</div></div>
-    </div>
-    <div class="ilabel" style="margin:20px 22px 0">ตั้งค่า</div>
-    <div class="sgrid">
-      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/></svg></div><span>ตั้งเวลาสแกน</span></div>
-      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 12l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg></div><span>ส่งออกข้อมูล</span></div>
-      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></div><span>รายงาน</span></div>
-      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></div><span>Audit log</span></div>
-      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg></div><span>สิทธิ์การใช้งาน</span></div>
-      <div class="sitem"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg></div><span>ล้างประวัติ</span></div>
-    </div>
-  </div>
-  <p class="note-inline">ใช้งานฟรี ไม่มีแพ็กเกจพรีเมียม · ขอบเขตการสแกนควบคุมด้วย config ตอน deploy</p>
-</main>
-
-<div class="tt" id="ttBox"></div>
-<script src="/static/js/app.js"></script>
+  <div class="tt" id="tt" role="tooltip"></div>
+  <script src="/static/js/app.js" defer></script>
 </body>
 </html>

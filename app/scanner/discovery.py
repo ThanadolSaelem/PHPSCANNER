@@ -1,14 +1,4 @@
-"""Device discovery for a local/authorized network.
-
-Non-privileged techniques only:
-  * liveness + latency via TCP connect (a refused connection still proves the
-    host is up — no raw sockets, no ICMP, no elevated privileges)
-  * MAC address read from the kernel ARP neighbour table (same-L2 hosts only)
-  * local subnet autodetect from the primary route
-
-MAC and L2 details are only available for hosts on the same broadcast domain as
-the scanner; across a router they come back empty, which is expected.
-"""
+"""Device discovery for a local/authorized network."""
 from __future__ import annotations
 
 import asyncio
@@ -23,9 +13,7 @@ _ZERO_MAC = "00:00:00:00:00:00"
 
 
 async def _probe_port(ip: str, port: int, timeout: float) -> Tuple[bool, Optional[float]]:
-    """Return ``(reachable, rtt_ms)``. Reachable means the host answered at all
-    (connection accepted *or* refused); timeout/error means no answer."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     start = loop.time()
     try:
         fut = asyncio.open_connection(ip, port)
@@ -55,12 +43,9 @@ async def intercepted_ports(ports: List[int], timeout: float,
     return {p for p, (ok, _) in zip(ports, results) if ok}
 
 
-async def alive_latency(ip: str, ports: List[int], timeout: float
-                        ) -> Tuple[bool, Optional[int]]:
-    """Is *ip* up, and what is the lowest round-trip latency (ms)?
-
-    *ports* should already exclude intercepted ports (see intercepted_ports).
-    """
+async def alive_latency(
+    ip: str, ports: List[int], timeout: float
+) -> Tuple[bool, Optional[int]]:
     if not ports:
         return False, None
     results = await asyncio.gather(*(_probe_port(ip, p, timeout) for p in ports))
@@ -70,11 +55,10 @@ async def alive_latency(ip: str, ports: List[int], timeout: float
 
 
 def read_arp_table() -> Dict[str, str]:
-    """Map ip -> mac from the kernel ARP table (Linux ``/proc/net/arp``)."""
     table: Dict[str, str] = {}
     try:
         with open("/proc/net/arp", encoding="utf-8") as fh:
-            next(fh, None)  # header
+            next(fh, None)
             for line in fh:
                 parts = line.split()
                 if len(parts) >= 4:
@@ -102,16 +86,15 @@ def _arp_command_table() -> Dict[str, str]:
         return {}
     table: Dict[str, str] = {}
     for ip, mac in _ARP_LINE.findall(out):
-        parts = re.split(r"[:-]", mac.lower())
-        norm = ":".join(p.zfill(2) for p in parts)
-        if norm != _ZERO_MAC and norm != "ff:ff:ff:ff:ff:ff":
+        norm = ":".join(p.zfill(2) for p in re.split(r"[:-]", mac.lower()))
+        if norm not in (_ZERO_MAC, "ff:ff:ff:ff:ff:ff"):
             table[ip] = norm
     return table
 
 
-def infer_device_type(ip: str, open_web_ports: List[int], has_tls: bool,
-                      has_other_open: bool) -> str:
-    """Heuristic label for a device based on where it sits and what it serves."""
+def infer_device_type(
+    ip: str, open_web_ports: List[int], has_tls: bool, has_other_open: bool
+) -> str:
     try:
         last = int(ip.rsplit(".", 1)[1])
     except (ValueError, IndexError):
@@ -124,7 +107,6 @@ def infer_device_type(ip: str, open_web_ports: List[int], has_tls: bool,
 
 
 def autodetect_subnets() -> List[Dict[str, str]]:
-    """Best-effort list of local subnets the scanner could target (/24 guesses)."""
     subnets: List[Dict[str, str]] = []
     seen: set[str] = set()
 
@@ -134,29 +116,35 @@ def autodetect_subnets() -> List[Dict[str, str]]:
         except ValueError:
             return
         key = str(net)
-        if key not in seen and ip != "127.0.0.1":
+        if key not in seen and ip != "127.0.0.1" and not ip.startswith("127."):
             seen.add(key)
             subnets.append({"name": name, "cidr": key})
 
-    # primary route
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect(("8.8.8.8", 80))
-            add("เครือข่ายหลัก", s.getsockname()[0])
+            add("เครือข่ายหลัก (Primary LAN)", s.getsockname()[0])
         finally:
             s.close()
     except OSError:
         pass
 
-    # any other IPv4 on the host
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            add("อินเทอร์เฟซ", info[4][0])
+            add("อินเทอร์เฟซภายใน (Local NIC)", info[4][0])
     except (OSError, socket.gaierror):
         pass
 
-    if not subnets and os.environ.get("THSCAN_DEFAULT_SUBNET"):
-        add("ค่าตั้งต้น", os.environ["THSCAN_DEFAULT_SUBNET"].split("/")[0],
-            int((os.environ["THSCAN_DEFAULT_SUBNET"].split("/") + ["24"])[1]))
+    default_sub = os.environ.get("THSCAN_DEFAULT_SUBNET", "").strip()
+    if not subnets and default_sub:
+        parts = default_sub.split("/")
+        try:
+            prefix = int(parts[1]) if len(parts) > 1 else 24
+        except ValueError:
+            prefix = 24
+        add("ค่าตั้งต้น (Default Subnet)", parts[0], prefix)
+
+    if not subnets:
+        add("เครือข่ายจำลองมาตรฐาน (Fallback LAN)", "192.168.1.0", 24)
     return subnets

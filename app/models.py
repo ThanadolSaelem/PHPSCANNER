@@ -1,11 +1,19 @@
 """Pydantic models shared between the API and the scan engine."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+
+class CompatBaseModel(BaseModel):
+    def dump_json_dict(self) -> Dict[str, Any]:
+        if hasattr(self, "model_dump"):
+            return self.model_dump(mode="json")  # type: ignore[attr-defined]
+        return json.loads(self.json())
 
 
 class Severity(str, Enum):
@@ -30,20 +38,15 @@ class JobState(str, Enum):
     failed = "failed"
 
 
-class ScanRequest(BaseModel):
-    """Payload the UI sends to start a scan."""
-
-    targets: List[str] = Field(
-        ...,
-        description="Targets to scan: CIDR (10.255.252.0/22), hyphen range "
-        "(10.0.0.10-10.0.0.50) or single IP. One per entry.",
-    )
+class ScanRequest(CompatBaseModel):
+    targets: List[str] = Field(default_factory=list)
     concurrency: Optional[int] = None
     polite_delay_ms: Optional[int] = None
-    note: str = Field("", description="Free-text label stored in the audit log.")
+    note: str = Field("")
+    demo_scenario: Optional[str] = Field(None)
 
 
-class Finding(BaseModel):
+class Finding(CompatBaseModel):
     rule_id: str
     title: str
     severity: Severity
@@ -52,12 +55,14 @@ class Finding(BaseModel):
     evidence: str = ""
     recommendation: str = ""
     cve: List[str] = Field(default_factory=list)
+    cvss: Optional[float] = None
+    cwe: Optional[str] = None
 
 
-class Device(BaseModel):
-    """A single online device discovered on the network."""
-
+class Device(CompatBaseModel):
     ip: str
+    hostname: Optional[str] = None
+    matched_suffix: Optional[str] = None
     up: bool = True
     mac: Optional[str] = None
     device_type: str = "LAN Device"
@@ -70,16 +75,38 @@ class Device(BaseModel):
     severity: Severity = Severity.safe
     assessment: str = ""
     findings: List[Finding] = Field(default_factory=list)
+    headers: Dict[str, str] = Field(default_factory=dict)
+    patched_at: Optional[str] = None  # demo jobs only: simulated patch
+    checked_at: Optional[str] = None  # real re-check of this host
 
 
-class ScanProgress(BaseModel):
+class ScanProgress(CompatBaseModel):
     total_ips: int = 0
     probed: int = 0
     online: int = 0
     risks: int = 0
 
 
-class ScanJob(BaseModel):
+class ScheduleCreate(CompatBaseModel):
+    name: str
+    targets: List[str]
+    cron: str = "0 2 * * *"
+    enabled: bool = True
+
+
+class ScheduleItem(CompatBaseModel):
+    id: str
+    name: str
+    targets: List[str]
+    cron: str
+    enabled: bool = True
+    created_at: str
+    last_run: Optional[str] = None
+    last_job_id: Optional[str] = None
+    next_run: Optional[str] = None
+
+
+class ScanJob(CompatBaseModel):
     id: str
     state: JobState = JobState.queued
     created_at: datetime
@@ -91,8 +118,34 @@ class ScanJob(BaseModel):
     devices: List[Device] = Field(default_factory=list)
     duration_s: Optional[float] = None
     workers: int = 0
-    intercepted_ports: List[int] = Field(default_factory=list)
     error: Optional[str] = None
+    demo_scenario: Optional[str] = None
+    intercepted_ports: List[int] = Field(default_factory=list)
+
+    def security_score(self) -> int:
+        if not self.devices:
+            return 100
+        penalty = 0
+        for d in self.devices:
+            if d.severity == Severity.critical:
+                penalty += 22
+            elif d.severity == Severity.high:
+                penalty += 14
+            elif d.severity == Severity.low:
+                penalty += 4
+        return max(0, min(100, 100 - penalty))
+
+    def security_grade(self) -> str:
+        score = self.security_score()
+        if score >= 90:
+            return "A"
+        if score >= 80:
+            return "B"
+        if score >= 65:
+            return "C"
+        if score >= 50:
+            return "D"
+        return "F"
 
     def summary(self) -> Dict:
         sev_counts: Dict[str, int] = {s.value: 0 for s in Severity}
@@ -106,7 +159,7 @@ class ScanJob(BaseModel):
             "state": self.state.value,
             "created_at": self.created_at.isoformat(),
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
-            "progress": self.progress.model_dump(),
+            "progress": self.progress.dump_json_dict(),
             "severity_counts": sev_counts,
             "online": len(self.devices),
             "risks": sum(1 for d in self.devices if d.severity != Severity.safe),
@@ -114,6 +167,9 @@ class ScanJob(BaseModel):
             "target_label": self.target_label,
             "duration_s": self.duration_s,
             "workers": self.workers,
-            "intercepted_ports": self.intercepted_ports,
             "note": self.request.note,
+            "demo_scenario": self.demo_scenario,
+            "intercepted_ports": self.intercepted_ports,
+            "security_score": self.security_score(),
+            "security_grade": self.security_grade(),
         }
