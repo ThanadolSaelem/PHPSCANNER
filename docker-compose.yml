@@ -20,8 +20,8 @@ services:
       # --- Safety rails ----------------------------------------------------
       THSCAN_MAX_TARGETS: "65536"
       THSCAN_MAX_CONCURRENCY: "50"
-      THSCAN_CONNECT_TIMEOUT: "1.5"
-      THSCAN_HTTP_TIMEOUT: "6"
+      THSCAN_CONNECT_TIMEOUT: "3.5"
+      THSCAN_HTTP_TIMEOUT: "8"
       THSCAN_POLITE_DELAY_MS: "0"
       THSCAN_WEB_PORTS: "80,443,8080,8443"
       THSCAN_LIVENESS_PORTS: "22,445,3389,53"

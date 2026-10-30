@@ -328,3 +328,19 @@ def test_schedule_update_keeps_id(api, tmp_path, monkeypatch):
     assert client.put(f"/api/schedules/{sid}", json={"name": "b", "targets": ["8.8.8.0/24"], "cron": "0 2 * * *"}).status_code == 403
     assert client.put("/api/schedules/nope", json={"name": "b", "targets": ["10.0.1.0/24"], "cron": "0 2 * * *"}).status_code == 404
     client.delete(f"/api/schedules/{sid}")
+
+
+def test_custom_profile_scans_only_requested_ports():
+    assert ports.profile_ports("custom", "21, 22", [80, 443, 8080, 8443]) == [21, 22]
+
+
+async def test_canary_rst_is_not_treated_as_intercepted_middlebox(monkeypatch):
+    from app.scanner import discovery
+
+    async def fake_open_connection(ip, port):
+        raise ConnectionRefusedError("TCP RST from router")
+
+    import asyncio
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+    blocked = await discovery.intercepted_ports([21, 22, 80], 1.5)
+    assert blocked == set()

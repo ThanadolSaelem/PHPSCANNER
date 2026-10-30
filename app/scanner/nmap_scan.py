@@ -119,11 +119,29 @@ def parse_traceroute(text: str) -> List[dict]:
 
 
 # ---- running (async subprocess) --------------------------------------------
+def _run_sync(argv: List[str], timeout: float) -> Optional[str]:
+    import subprocess
+    try:
+        res = subprocess.run(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+        return res.stdout.decode("utf-8", errors="replace")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 async def _run(argv: List[str], timeout: float) -> Optional[str]:
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
         )
+    except NotImplementedError:
+        # Windows SelectorEventLoop fallback
+        return await asyncio.to_thread(_run_sync, argv, timeout)
     except (OSError, ValueError):
         return None
     try:
@@ -140,14 +158,20 @@ async def _run(argv: List[str], timeout: float) -> Optional[str]:
 async def run_nmap(targets: List[str], ports: List[int], timeout: float = 240.0,
                    extra_args: Optional[List[str]] = None) -> Dict[str, NmapHost]:
     """TCP-connect service/version scan of *targets* on *ports*. -Pn so nmap
-    scans every target without a privileged ping sweep."""
+    scans every target without a privileged ping sweep.
+
+    Uses ``-T3`` with ``--initial-rtt-timeout 1000ms`` and ``--max-rtt-timeout 4000ms``
+    (instead of ``-T4``'s 500ms initial RTT cap) so remote hosts with 500ms+
+    round-trip latency (e.g. campus/WAN networks) are reliably detected.
+    """
     if not targets or not ports or not nmap_available():
         return {}
     port_spec = ",".join(str(p) for p in sorted(set(ports)))
-    # --host-timeout caps time per host so one slow/filtered target can't stall
-    # the whole run; --max-retries keeps probes bounded on lossy links.
-    argv = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-T4",
-            "--host-timeout", "120s", "--max-retries", "2",
+    argv = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-T3",
+            "--min-rtt-timeout", "250ms",
+            "--initial-rtt-timeout", "1000ms",
+            "--max-rtt-timeout", "4000ms",
+            "--host-timeout", "180s", "--max-retries", "3",
             "-p", port_spec, "-oX", "-", *(extra_args or []), *targets]
     xml = await _run(argv, timeout)
     return parse_nmap_xml(xml) if xml else {}

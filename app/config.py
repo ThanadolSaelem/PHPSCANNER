@@ -57,8 +57,8 @@ class Settings:
     max_concurrency: int = _env_int("THSCAN_MAX_CONCURRENCY", 50)
     # upper bound on (addresses x ports) for one scan
     max_port_probes: int = _env_int("THSCAN_MAX_PORT_PROBES", 2_000_000)
-    connect_timeout: float = _env_float("THSCAN_CONNECT_TIMEOUT", 1.5)
-    http_timeout: float = _env_float("THSCAN_HTTP_TIMEOUT", 6.0)
+    connect_timeout: float = _env_float("THSCAN_CONNECT_TIMEOUT", 3.5)
+    http_timeout: float = _env_float("THSCAN_HTTP_TIMEOUT", 8.0)
     polite_delay_ms: int = _env_int("THSCAN_POLITE_DELAY_MS", 0)
     web_ports: List[int] = field(
         default_factory=lambda: [

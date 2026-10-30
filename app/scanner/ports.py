@@ -129,13 +129,18 @@ def parse_ports(spec: str, limit: int = MAX_CUSTOM_PORTS) -> List[int]:
 
 
 def profile_ports(profile: str, custom: str, web_ports: List[int]) -> List[int]:
-    """The ports a scan checks for the given profile (web ports always included)."""
+    """The ports a scan checks for the given profile.
+
+    When ``profile == "custom"``, scan ONLY the ports explicitly requested by the
+    operator (instead of silently adding all default web ports), so targeted
+    scans like ``21, 22`` do not trigger firewall rate limits with unrequested probes.
+    """
     if profile == "web":
-        extra: List[int] = []
-    elif profile == "top100":
+        return sorted(set(web_ports))
+    if profile == "custom":
+        return parse_ports(custom)
+    if profile == "top100":
         extra = TOP100
-    elif profile == "custom":
-        extra = parse_ports(custom)
     elif profile == "common":
         extra = COMMON
     else:

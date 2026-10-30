@@ -97,13 +97,16 @@ class ScanEngine:
 
         web_ports = sorted(set(s.web_ports) | set(req.extra_web_ports))
         scan_ports = ports.profile_ports(req.port_profile, req.custom_ports, web_ports)
+        if req.port_profile == "custom" and req.extra_web_ports:
+            scan_ports = sorted(set(scan_ports) | set(req.extra_web_ports))
         job.scanned_ports = scan_ports
-        # A host counts as "online" if ANY port we're going to scan answers, so
-        # the chosen port profile actually finds hosts (e.g. a box whose only
-        # open port is MySQL/3306) instead of only adding detail to hosts that
-        # already answered on a web/standard port. Liveness and the port scan
-        # run over the same set.
-        live_ports = list(dict.fromkeys(scan_ports + s.liveness_ports))
+        # When the operator selects "custom" ports (e.g. "21, 22"), probe only
+        # those ports for both liveness and inspection so we don't trigger
+        # remote firewall rate-limits with 7 extra unrequested ports.
+        if req.port_profile == "custom":
+            live_ports = list(scan_ports)
+        else:
+            live_ports = list(dict.fromkeys(scan_ports + s.liveness_ports))
         resolver = dns_resolver.ReverseResolver(timeout=1.5)
         devices: List[Device] = []
 
@@ -148,6 +151,10 @@ class ScanEngine:
                     host = nmap_map.get(ip)
                     up = bool(host and host.ports)
                     latency = None
+                    if up:
+                        # Measure quick latency on the first open port reported by nmap
+                        first_port = sorted(host.ports)[0]
+                        _, latency = await discovery.alive_latency(ip, [first_port], s.connect_timeout)
                     verified = up
                     job.progress.probed += 1
                     if up:

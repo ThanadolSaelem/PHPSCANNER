@@ -1,0 +1,290 @@
+diff --git a/app/config.py b/app/config.py
+index 3685394..34f4bba 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -57,8 +57,8 @@ class Settings:
+     max_concurrency: int = _env_int("THSCAN_MAX_CONCURRENCY", 50)
+     # upper bound on (addresses x ports) for one scan
+     max_port_probes: int = _env_int("THSCAN_MAX_PORT_PROBES", 2_000_000)
+-    connect_timeout: float = _env_float("THSCAN_CONNECT_TIMEOUT", 1.5)
+-    http_timeout: float = _env_float("THSCAN_HTTP_TIMEOUT", 6.0)
++    connect_timeout: float = _env_float("THSCAN_CONNECT_TIMEOUT", 3.5)
++    http_timeout: float = _env_float("THSCAN_HTTP_TIMEOUT", 8.0)
+     polite_delay_ms: int = _env_int("THSCAN_POLITE_DELAY_MS", 0)
+     web_ports: List[int] = field(
+         default_factory=lambda: [
+diff --git a/app/scanner/discovery.py b/app/scanner/discovery.py
+index fbdf68e..76911bf 100644
+--- a/app/scanner/discovery.py
++++ b/app/scanner/discovery.py
+@@ -38,16 +38,35 @@ async def _probe_port_unlimited(ip: str, port: int, timeout: float) -> Tuple[boo
+         return False, None
+ 
+ 
++async def _accepts_tcp(ip: str, port: int, timeout: float) -> bool:
++    """Return True ONLY when a full TCP handshake succeeds (SYN-ACK).
++    Unlike ``_probe_port``, a TCP RST (``ConnectionRefusedError``) returns False
++    so a router rejecting RFC 5737 canary traffic is never mistaken for a proxy."""
++    async with netlimit.slot():
++        try:
++            fut = asyncio.open_connection(ip, port)
++            _, writer = await asyncio.wait_for(fut, timeout=timeout)
++            writer.close()
++            try:
++                await writer.wait_closed()
++            except (ConnectionError, OSError):
++                pass
++            return True
++        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
++            return False
++
++
+ # A documentation address (RFC 5737 TEST-NET-2) that can never be a real host.
+-# Anything that answers for it is a middlebox answering for every address.
++# Anything that completes a TCP handshake for it is a middlebox answering for every address.
+ CANARY_IP = "198.51.100.1"
+ 
+ 
+ async def intercepted_ports(ports: List[int], timeout: float,
+                             canary: str = CANARY_IP) -> set:
+-    """Ports on which *something* answers for an address that cannot exist."""
+-    results = await asyncio.gather(*(_probe_port(canary, p, timeout) for p in ports))
+-    return {p for p, (ok, _) in zip(ports, results) if ok}
++    """Ports on which a transparent proxy/middlebox accepts TCP for a non-existent IP."""
++    canary_timeout = min(timeout, 1.5)
++    results = await asyncio.gather(*(_accepts_tcp(canary, p, canary_timeout) for p in ports))
++    return {p for p, ok in zip(ports, results) if ok}
+ 
+ 
+ async def alive_latency(
+diff --git a/app/scanner/engine.py b/app/scanner/engine.py
+index 9a58ff6..1c098de 100644
+--- a/app/scanner/engine.py
++++ b/app/scanner/engine.py
+@@ -97,13 +97,16 @@ class ScanEngine:
+ 
+         web_ports = sorted(set(s.web_ports) | set(req.extra_web_ports))
+         scan_ports = ports.profile_ports(req.port_profile, req.custom_ports, web_ports)
++        if req.port_profile == "custom" and req.extra_web_ports:
++            scan_ports = sorted(set(scan_ports) | set(req.extra_web_ports))
+         job.scanned_ports = scan_ports
+-        # A host counts as "online" if ANY port we're going to scan answers, so
+-        # the chosen port profile actually finds hosts (e.g. a box whose only
+-        # open port is MySQL/3306) instead of only adding detail to hosts that
+-        # already answered on a web/standard port. Liveness and the port scan
+-        # run over the same set.
+-        live_ports = list(dict.fromkeys(scan_ports + s.liveness_ports))
++        # When the operator selects "custom" ports (e.g. "21, 22"), probe only
++        # those ports for both liveness and inspection so we don't trigger
++        # remote firewall rate-limits with 7 extra unrequested ports.
++        if req.port_profile == "custom":
++            live_ports = list(scan_ports)
++        else:
++            live_ports = list(dict.fromkeys(scan_ports + s.liveness_ports))
+         resolver = dns_resolver.ReverseResolver(timeout=1.5)
+         devices: List[Device] = []
+ 
+@@ -148,6 +151,10 @@ class ScanEngine:
+                     host = nmap_map.get(ip)
+                     up = bool(host and host.ports)
+                     latency = None
++                    if up:
++                        # Measure quick latency on the first open port reported by nmap
++                        first_port = sorted(host.ports)[0]
++                        _, latency = await discovery.alive_latency(ip, [first_port], s.connect_timeout)
+                     verified = up
+                     job.progress.probed += 1
+                     if up:
+diff --git a/app/scanner/nmap_scan.py b/app/scanner/nmap_scan.py
+index 4ad6968..4fab2ef 100644
+--- a/app/scanner/nmap_scan.py
++++ b/app/scanner/nmap_scan.py
+@@ -119,11 +119,29 @@ def parse_traceroute(text: str) -> List[dict]:
+ 
+ 
+ # ---- running (async subprocess) --------------------------------------------
++def _run_sync(argv: List[str], timeout: float) -> Optional[str]:
++    import subprocess
++    try:
++        res = subprocess.run(
++            argv,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL,
++            timeout=timeout,
++            check=False,
++        )
++        return res.stdout.decode("utf-8", errors="replace")
++    except (OSError, ValueError, subprocess.SubprocessError):
++        return None
++
++
+ async def _run(argv: List[str], timeout: float) -> Optional[str]:
+     try:
+         proc = await asyncio.create_subprocess_exec(
+             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+         )
++    except NotImplementedError:
++        # Windows SelectorEventLoop fallback
++        return await asyncio.to_thread(_run_sync, argv, timeout)
+     except (OSError, ValueError):
+         return None
+     try:
+@@ -140,14 +158,20 @@ async def _run(argv: List[str], timeout: float) -> Optional[str]:
+ async def run_nmap(targets: List[str], ports: List[int], timeout: float = 240.0,
+                    extra_args: Optional[List[str]] = None) -> Dict[str, NmapHost]:
+     """TCP-connect service/version scan of *targets* on *ports*. -Pn so nmap
+-    scans every target without a privileged ping sweep."""
++    scans every target without a privileged ping sweep.
++
++    Uses ``-T3`` with ``--initial-rtt-timeout 1000ms`` and ``--max-rtt-timeout 4000ms``
++    (instead of ``-T4``'s 500ms initial RTT cap) so remote hosts with 500ms+
++    round-trip latency (e.g. campus/WAN networks) are reliably detected.
++    """
+     if not targets or not ports or not nmap_available():
+         return {}
+     port_spec = ",".join(str(p) for p in sorted(set(ports)))
+-    # --host-timeout caps time per host so one slow/filtered target can't stall
+-    # the whole run; --max-retries keeps probes bounded on lossy links.
+-    argv = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-T4",
+-            "--host-timeout", "120s", "--max-retries", "2",
++    argv = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-T3",
++            "--min-rtt-timeout", "250ms",
++            "--initial-rtt-timeout", "1000ms",
++            "--max-rtt-timeout", "4000ms",
++            "--host-timeout", "180s", "--max-retries", "3",
+             "-p", port_spec, "-oX", "-", *(extra_args or []), *targets]
+     xml = await _run(argv, timeout)
+     return parse_nmap_xml(xml) if xml else {}
+diff --git a/app/scanner/ports.py b/app/scanner/ports.py
+index df1bd5e..b0f84c0 100644
+--- a/app/scanner/ports.py
++++ b/app/scanner/ports.py
+@@ -129,13 +129,18 @@ def parse_ports(spec: str, limit: int = MAX_CUSTOM_PORTS) -> List[int]:
+ 
+ 
+ def profile_ports(profile: str, custom: str, web_ports: List[int]) -> List[int]:
+-    """The ports a scan checks for the given profile (web ports always included)."""
++    """The ports a scan checks for the given profile.
++
++    When ``profile == "custom"``, scan ONLY the ports explicitly requested by the
++    operator (instead of silently adding all default web ports), so targeted
++    scans like ``21, 22`` do not trigger firewall rate limits with unrequested probes.
++    """
+     if profile == "web":
+-        extra: List[int] = []
+-    elif profile == "top100":
++        return sorted(set(web_ports))
++    if profile == "custom":
++        return parse_ports(custom)
++    if profile == "top100":
+         extra = TOP100
+-    elif profile == "custom":
+-        extra = parse_ports(custom)
+     elif profile == "common":
+         extra = COMMON
+     else:
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 754739d..3bbff02 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -20,8 +20,8 @@ services:
+       # --- Safety rails ----------------------------------------------------
+       THSCAN_MAX_TARGETS: "65536"
+       THSCAN_MAX_CONCURRENCY: "50"
+-      THSCAN_CONNECT_TIMEOUT: "1.5"
+-      THSCAN_HTTP_TIMEOUT: "6"
++      THSCAN_CONNECT_TIMEOUT: "3.5"
++      THSCAN_HTTP_TIMEOUT: "8"
+       THSCAN_POLITE_DELAY_MS: "0"
+       THSCAN_WEB_PORTS: "80,443,8080,8443"
+       THSCAN_LIVENESS_PORTS: "22,445,3389,53"
+diff --git a/tests/test_nmap_deep.py b/tests/test_nmap_deep.py
+index 05577f5..ec4c3f4 100644
+--- a/tests/test_nmap_deep.py
++++ b/tests/test_nmap_deep.py
+@@ -145,3 +145,61 @@ async def test_deep_falls_back_when_nmap_returns_nothing(monkeypatch, tmp_path):
+     assert job.state.value == "completed"
+     assert job.scan_mode == "fast"          # fell back → badge says fast
+     assert job.note_deep and "ถอยไปใช้โหมดเร็ว" in job.note_deep
++
++
++async def test_deep_custom_ports_21_22_high_latency_subnet(monkeypatch, tmp_path):
++    from app.scanner import discovery, dns_resolver, engine as eng, http_probe
++
++    captured_argv = []
++
++    async def fake_run(argv, timeout):
++        captured_argv.extend(argv)
++        return """<nmaprun><host><status state="up"/>
++          <address addr="203.158.167.4" addrtype="ipv4"/>
++          <hostnames><hostname name="1now.rmutl.ac.th"/></hostnames>
++          <ports>
++            <port protocol="tcp" portid="21"><state state="open"/><service name="ftp" product="vsftpd" version="3.0.5"/></port>
++            <port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="8.9p1"/></port>
++          </ports></host></nmaprun>"""
++
++    async def fake_intercepted(ports_, timeout, canary=discovery.CANARY_IP):
++        return set()
++
++    async def fake_alive(ip, ports_, timeout):
++        return (ip == "203.158.167.4"), (530 if ip == "203.158.167.4" else None)
++
++    async def fake_resolve_match(self, ip, suffixes):
++        if ip == "203.158.167.4":
++            return ip, "1now.rmutl.ac.th", "ac.th"
++        return ip, None, None
++
++    monkeypatch.setattr(nmap_scan, "nmap_available", lambda: True)
++    monkeypatch.setattr(nmap_scan, "traceroute_available", lambda: False)
++    monkeypatch.setattr(nmap_scan, "_run", fake_run)
++    monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
++    monkeypatch.setattr(discovery, "alive_latency", fake_alive)
++    monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
++    monkeypatch.setattr(dns_resolver.ReverseResolver, "resolve_and_match", fake_resolve_match)
++
++    s = Settings()
++    s.data_dir = str(tmp_path)
++    req = ScanRequest(
++        targets=["203.158.167.0/29"],
++        port_profile="custom",
++        custom_ports="21, 22",
++        scan_mode="deep",
++    )
++    job = ScanJob(id="rmutl", created_at=datetime.now(timezone.utc), request=req)
++    await eng.ScanEngine(s).run(job, asyncio.Event())
++
++    assert job.state.value == "completed", job.error
++    assert job.scanned_ports == [21, 22]
++    assert "-T3" in captured_argv
++    assert "21,22" in captured_argv
++    assert job.progress.online == 1
++    assert len(job.devices) == 1
++    dev = job.devices[0]
++    assert dev.ip == "203.158.167.4"
++    assert dev.hostname == "1now.rmutl.ac.th"
++    assert dev.latency_ms == 530
++    assert [sp.port for sp in dev.services] == [21, 22]
+diff --git a/tests/test_ports_and_sites.py b/tests/test_ports_and_sites.py
+index d6fd8d7..28872c3 100644
+--- a/tests/test_ports_and_sites.py
++++ b/tests/test_ports_and_sites.py
+@@ -328,3 +328,19 @@ def test_schedule_update_keeps_id(api, tmp_path, monkeypatch):
+     assert client.put(f"/api/schedules/{sid}", json={"name": "b", "targets": ["8.8.8.0/24"], "cron": "0 2 * * *"}).status_code == 403
+     assert client.put("/api/schedules/nope", json={"name": "b", "targets": ["10.0.1.0/24"], "cron": "0 2 * * *"}).status_code == 404
+     client.delete(f"/api/schedules/{sid}")
++
++
++def test_custom_profile_scans_only_requested_ports():
++    assert ports.profile_ports("custom", "21, 22", [80, 443, 8080, 8443]) == [21, 22]
++
++
++async def test_canary_rst_is_not_treated_as_intercepted_middlebox(monkeypatch):
++    from app.scanner import discovery
++
++    async def fake_open_connection(ip, port):
++        raise ConnectionRefusedError("TCP RST from router")
++
++    import asyncio
++    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
++    blocked = await discovery.intercepted_ports([21, 22, 80], 1.5)
++    assert blocked == set()

@@ -145,3 +145,61 @@ async def test_deep_falls_back_when_nmap_returns_nothing(monkeypatch, tmp_path):
     assert job.state.value == "completed"
     assert job.scan_mode == "fast"          # fell back → badge says fast
     assert job.note_deep and "ถอยไปใช้โหมดเร็ว" in job.note_deep
+
+
+async def test_deep_custom_ports_21_22_high_latency_subnet(monkeypatch, tmp_path):
+    from app.scanner import discovery, dns_resolver, engine as eng, http_probe
+
+    captured_argv = []
+
+    async def fake_run(argv, timeout):
+        captured_argv.extend(argv)
+        return """<nmaprun><host><status state="up"/>
+          <address addr="203.158.167.4" addrtype="ipv4"/>
+          <hostnames><hostname name="1now.rmutl.ac.th"/></hostnames>
+          <ports>
+            <port protocol="tcp" portid="21"><state state="open"/><service name="ftp" product="vsftpd" version="3.0.5"/></port>
+            <port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="8.9p1"/></port>
+          </ports></host></nmaprun>"""
+
+    async def fake_intercepted(ports_, timeout, canary=discovery.CANARY_IP):
+        return set()
+
+    async def fake_alive(ip, ports_, timeout):
+        return (ip == "203.158.167.4"), (530 if ip == "203.158.167.4" else None)
+
+    async def fake_resolve_match(self, ip, suffixes):
+        if ip == "203.158.167.4":
+            return ip, "1now.rmutl.ac.th", "ac.th"
+        return ip, None, None
+
+    monkeypatch.setattr(nmap_scan, "nmap_available", lambda: True)
+    monkeypatch.setattr(nmap_scan, "traceroute_available", lambda: False)
+    monkeypatch.setattr(nmap_scan, "_run", fake_run)
+    monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
+    monkeypatch.setattr(discovery, "alive_latency", fake_alive)
+    monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(dns_resolver.ReverseResolver, "resolve_and_match", fake_resolve_match)
+
+    s = Settings()
+    s.data_dir = str(tmp_path)
+    req = ScanRequest(
+        targets=["203.158.167.0/29"],
+        port_profile="custom",
+        custom_ports="21, 22",
+        scan_mode="deep",
+    )
+    job = ScanJob(id="rmutl", created_at=datetime.now(timezone.utc), request=req)
+    await eng.ScanEngine(s).run(job, asyncio.Event())
+
+    assert job.state.value == "completed", job.error
+    assert job.scanned_ports == [21, 22]
+    assert "-T3" in captured_argv
+    assert "21,22" in captured_argv
+    assert job.progress.online == 1
+    assert len(job.devices) == 1
+    dev = job.devices[0]
+    assert dev.ip == "203.158.167.4"
+    assert dev.hostname == "1now.rmutl.ac.th"
+    assert dev.latency_ms == 530
+    assert [sp.port for sp in dev.services] == [21, 22]
