@@ -319,8 +319,7 @@ async def list_schedules() -> list:
     return [s.dump_json_dict() for s in store.list_schedules()]
 
 
-@app.post("/api/schedules")
-async def create_schedule(payload: ScheduleCreate) -> dict:
+def _validate_schedule(payload: ScheduleCreate) -> None:
     if not payload.name.strip() or not payload.targets:
         raise HTTPException(400, "กรุณาระบุชื่อตารางเวลาและเป้าหมาย")
     try:
@@ -338,7 +337,22 @@ async def create_schedule(payload: ScheduleCreate) -> dict:
         ports.profile_ports(payload.port_profile, payload.custom_ports, settings.web_ports)
     except ports.PortSpecError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.post("/api/schedules")
+async def create_schedule(payload: ScheduleCreate) -> dict:
+    _validate_schedule(payload)
     item = store.add_schedule(payload)
+    scheduler.refresh_next_runs()
+    return item.dump_json_dict()
+
+
+@app.put("/api/schedules/{sched_id}")
+async def update_schedule(sched_id: str, payload: ScheduleCreate) -> dict:
+    _validate_schedule(payload)
+    item = store.update_schedule(sched_id, payload)
+    if item is None:
+        raise HTTPException(404, "ไม่พบตารางเวลา")
     scheduler.refresh_next_runs()
     return item.dump_json_dict()
 

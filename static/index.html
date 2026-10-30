@@ -4,75 +4,36 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="thscan — ตรวจเว็บและ PHP ในเครือข่ายของหน่วยงานว่าเสี่ยงช่องโหว่ PHP2Shell หรือไม่ ใช้ฟรี ติดตั้งเอง ไม่ทำลายระบบ">
+  <meta name="description" content="thscan — ตรวจเว็บ พอร์ต และช่องโหว่ PHP2Shell ในเครือข่ายของหน่วยงาน ใช้ฟรี ติดตั้งเอง ไม่ทำลายระบบ">
   <title>thscan · ตรวจช่องโหว่ PHP2Shell</title>
+  <link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/anuphan-thai.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231B4FE4'/%3E%3Cpath d='M16 7l8 3v6c0 4.6-3.3 8.3-8 9.5-4.7-1.2-8-4.9-8-9.5v-6z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232F5BEA'/%3E%3Cstop offset='1' stop-color='%236D4AFF'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M16 7l8 3v6c0 4.6-3.3 8.3-8 9.5-4.7-1.2-8-4.9-8-9.5v-6z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
-  <!-- icon sprite (stroke icons, 24px grid) -->
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <defs>
-      <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.6-3.3 8.3-8 9.5C7.3 20.3 4 16.6 4 12V6z"/></symbol>
-      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.6 2.5L16 9.5"/></symbol>
-      <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
-      <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
-      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.01"/></symbol>
-      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></symbol>
-      <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
-      <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></symbol>
-      <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
-      <symbol id="i-table" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M10 10v9"/></symbol>
-      <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/></symbol>
-      <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
-      <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
-      <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
-      <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
-      <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
-      <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-      <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
-      <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
-      <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5v.01M8 16.5v.01"/></symbol>
-      <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4.5 6v.01M4.5 12v.01M4.5 18v.01"/></symbol>
-      <symbol id="i-print" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="8" rx="2"/><path d="M7 14h10v6H7z"/></symbol>
-      <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
-      <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l5 3.5-5 3.5z"/></symbol>
-    </defs>
-  </svg>
+  <div class="glow" aria-hidden="true"></div>
+  <div class="floor" aria-hidden="true"></div>
+  <a class="sr" href="#app">ข้ามไปเนื้อหาหลัก</a>
 
-  <a class="sr-only" href="#app">ข้ามไปเนื้อหาหลัก</a>
-
-  <header class="site-header">
-    <div class="wrap">
-      <a class="brand" href="#/" aria-label="thscan หน้าแรก">
-        <span class="brand-mark"><svg aria-hidden="true"><use href="#i-shield"/></svg></span>
-        thscan
-      </a>
-      <nav class="nav" id="nav" aria-label="เมนูหลัก">
-        <a href="#/latest" data-nav="results">ผลการสแกนล่าสุด</a>
-        <a href="#/history" data-nav="history">ประวัติ</a>
-        <a href="#/settings" data-nav="settings">ตั้งเวลาและการตั้งค่า</a>
-      </nav>
-      <a class="btn btn-primary header-cta" href="#/" data-start>สแกนใหม่</a>
-      <button class="nav-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="เปิดเมนู">
-        <svg aria-hidden="true"><use href="#i-menu"/></svg>
-      </button>
-    </div>
+  <header class="top">
+    <a class="brand" href="#/" aria-label="thscan หน้าแรก">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 6v6c0 4.6-3.3 8.3-8 9.5C7.3 20.3 4 16.6 4 12V6Z"/><path d="m8.5 12 2.5 2.5 4.5-5" stroke-linecap="round"/></svg></span>
+      <span><b>thscan</b><small>ตรวจช่องโหว่ PHP2Shell</small></span>
+    </a>
+    <nav class="nav" aria-label="เมนูหลัก">
+      <a href="#/" data-nav="scan">สแกน</a>
+      <a href="#/latest" data-nav="results">ผลการสแกน</a>
+      <a href="#/history" data-nav="history">ประวัติ</a>
+      <a href="#/settings" data-nav="settings">ตั้งเวลา</a>
+      <a href="#/report/latest" data-nav="report">รายงาน</a>
+    </nav>
+    <div class="top-side" id="top-side"></div>
   </header>
 
   <main id="app" tabindex="-1">
-    <noscript>
-      <div class="wrap section"><p>thscan ต้องเปิด JavaScript ในเบราว์เซอร์จึงจะใช้งานได้</p></div>
-    </noscript>
+    <noscript><div class="app"><p>thscan ต้องเปิด JavaScript ในเบราว์เซอร์จึงจะใช้งานได้</p></div></noscript>
   </main>
-
-  <footer class="site-footer">
-    <div class="wrap">
-      <span>thscan <span id="ver"></span> · โอเพนซอร์ส ใช้ฟรี · ติดตั้งและดูแลโดยหน่วยงานของคุณเอง</span>
-      <span>ใช้ตรวจเฉพาะเครือข่ายที่หน่วยงานของคุณดูแลเท่านั้น</span>
-    </div>
-  </footer>
 
   <div class="tt" id="tt" role="tooltip"></div>
   <script src="/static/js/app.js" defer></script>

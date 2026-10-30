@@ -1,25 +1,20 @@
 /* thscan UI — every screen renders data from the REST API; nothing is invented
-   client-side. Demo results come from the server and are always labelled. */
+   client-side. Demo results come from the server and are always labelled.
+   Tools stay folded into one-line "docks" and open on hover, tap or focus. */
 "use strict";
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const icon = (id) => `<svg aria-hidden="true"><use href="#i-${id}"/></svg>`;
-const tip = (text) => `<button type="button" class="tip" data-tip="${esc(text)}" aria-label="คำอธิบาย: ${esc(text)}">${icon("info")}</button>`;
 const nf = new Intl.NumberFormat("th-TH");
 const num = (n) => nf.format(n || 0);
-const store = {
-  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
-};
+const reduceMotion = () => window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function fmtDate(iso, withTime = true) {
+function fmtDate(iso, opts = { dateStyle: "medium", timeStyle: "short" }) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (isNaN(d)) return "—";
-  const opts = withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" };
   try { return d.toLocaleString("th-TH", { ...opts, timeZone: (cfg && cfg.timezone) || undefined }); }
   catch { return d.toLocaleString("th-TH", opts); }
 }
@@ -44,80 +39,131 @@ async function api(path, opts = {}) {
   return data;
 }
 
+/* ── icons (24px stroke) ────────────────────────────────────────────── */
+const P = {
+  chev: "m6 9 6 6 6-6", arrow: "M5 12h14M13 6l6 6-6 6", back: "M19 12H5M11 6l-6 6 6 6",
+  check: "m5 12.5 4.5 4.5L19 7.5", x: "M7 7l10 10M17 7 7 17", alert: "M12 4 21 20H3Z M12 10v4 M12 17h.01",
+  warn: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Z M12 8v5 M12 16h.01",
+  plate: "M3 12 12 7.5 21 12 12 16.5Z M3 15.5 12 20 21 15.5", range: "M4 12h16M4 8v8M20 8v8",
+  cube: "M12 3 20 7.5v9L12 21 4 16.5v-9Z M4 7.5 12 12l8-4.5M12 12v9", globe: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Z M3.5 12h17 M12 3.5c2.4 2.5 3.5 5.3 3.5 8.5s-1.1 6-3.5 8.5c-2.4-2.5-3.5-5.3-3.5-8.5s1.1-6 3.5-8.5Z",
+  lines: "M5 7h14M5 12h10M5 17h6", sliders: "M4 7h10M18 7h2M4 17h4M12 17h8 M16 5v4 M10 15v4",
+  refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7", copy: "M9 9h11v11H9Z M5 15V6a2 2 0 0 1 2-2h8", download: "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14",
+  search: "M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Z M16 16l4 4", print: "M7 9V4h10v5 M4 9h16v8H4Z M7 14h10v6H7Z",
+  trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3", clock: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Z M12 7.5V12l3 2",
+  shield: "M12 3 20 6v6c0 4.6-3.3 8.3-8 9.5C7.3 20.3 4 16.6 4 12V6Z",
+};
+const ic = (name, size = 18, sw = 2) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name]}"/></svg>`;
+const chev = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="${P.chev}"/></svg>`;
+
 /* ── labels ──────────────────────────────────────────────────────────── */
 const SEV = {
-  critical: { cls: "crit", label: "ต้องแก้ด่วน", verdict: "crit", title: "ต้องแก้ไขโดยด่วน", rank: 0 },
-  high: { cls: "warn", label: "เสี่ยงสูง", verdict: "warn", title: "มีความเสี่ยงสูง ควรแก้ไขเร็วที่สุด", rank: 1 },
-  low: { cls: "plain", label: "ควรปรับปรุง", verdict: "warn", title: "ความเสี่ยงต่ำ ควรปรับปรุงเมื่อสะดวก", rank: 2 },
-  safe: { cls: "ok", label: "ผ่าน", verdict: "ok", title: "ไม่พบช่องโหว่ PHP2Shell", rank: 3 },
+  critical: { word: "ต้องแก้ด่วน", cls: "b-bad", icon: "alert", title: "ต้องแก้ไขโดยด่วน", bg: "var(--crit-bg)", fg: "#8E1B22", dot: "var(--crit-dot)", rank: 0 },
+  high: { word: "เสี่ยงสูง", cls: "b-warn", icon: "warn", title: "มีความเสี่ยงสูง ควรแก้เร็วที่สุด", bg: "var(--warn-bg)", fg: "#6E3F00", dot: "var(--warn-dot)", rank: 1 },
+  low: { word: "ควรปรับปรุง", cls: "b-warn", icon: "warn", title: "ควรปรับปรุงเมื่อสะดวก", bg: "var(--warn-bg)", fg: "#6E3F00", dot: "var(--warn-dot)", rank: 2 },
+  safe: { word: "ผ่าน", cls: "b-ok", icon: "check", title: "ไม่พบช่องโหว่ PHP2Shell", bg: "var(--ok-bg)", fg: "#0A5C39", dot: "var(--ok-dot)", rank: 3 },
 };
-const sevBadge = (s) => `<span class="badge ${SEV[s].cls}">${SEV[s].label}</span>`;
-const CONF = { confirmed: "ยืนยันแล้ว", high: "มั่นใจสูง", medium: "มั่นใจปานกลาง", low: "มั่นใจต่ำ" };
-const DEVTYPE = {
-  "Gateway Router": "เราเตอร์ / เกตเวย์",
-  "Web Server (HTTPS)": "เว็บเซิร์ฟเวอร์ (HTTPS)",
-  "Web Server (HTTP)": "เว็บเซิร์ฟเวอร์ (HTTP)",
-  "LAN Device": "อุปกรณ์ในเครือข่าย",
-};
+const sevBadge = (s) => `<span class="badge ${SEV[s].cls}">${ic(SEV[s].icon, 13, 2.6)}${SEV[s].word}</span>`;
+const CONF = { confirmed: "ยืนยันแล้ว", high: "สูง", medium: "ปานกลาง", low: "ต่ำ" };
+const DEVTYPE = { "Gateway Router": "เราเตอร์ / เกตเวย์", "Web Server (HTTPS)": "เว็บเซิร์ฟเวอร์ (HTTPS)", "Web Server (HTTP)": "เว็บเซิร์ฟเวอร์ (HTTP)", "LAN Device": "อุปกรณ์ในเครือข่าย" };
 const devType = (t) => DEVTYPE[t] || t || "—";
 const STATE = { queued: "รอคิว", running: "กำลังสแกน", completed: "เสร็จแล้ว", cancelled: "ยกเลิกแล้ว", failed: "ผิดพลาด" };
 const DOW = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
-const TIPS = {
-  scope: "ช่วง IP ที่ผู้ติดตั้ง thscan อนุญาตให้สแกน (ตั้งใน THSCAN_ALLOWED_CIDRS ตอนติดตั้ง) เป้าหมายนอกช่วงนี้ระบบจะปฏิเสธเสมอ",
-  score: "คำนวณโดย thscan จากจำนวนเครื่องที่เสี่ยง (เริ่ม 100 · ด่วน −22 · สูง −14 · ต่ำ −4) ใช้ติดตามความคืบหน้าภายในหน่วยงาน ไม่ใช่คะแนนรับรองจาก ThaiCERT หรือหน่วยงานใด",
-  online: "เครื่องที่ตอบสนองการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง",
-  mac: "หมายเลขประจำการ์ดเครือข่าย อ่านได้เฉพาะเครื่องที่อยู่ในวง LAN เดียวกับเครื่องที่รัน thscan ถ้าอยู่คนละวง (ข้ามเราเตอร์) จะว่าง",
-  latency: "เวลาที่เครื่องใช้ตอบกลับ หน่วยมิลลิวินาที ยิ่งน้อยยิ่งเร็ว",
-  host: "ชื่อที่ได้จากการค้นหา DNS ย้อนกลับ (reverse DNS) ถ้าไม่มีการตั้งชื่อไว้จะว่าง",
-  type: "คาดเดาจากบริการที่เปิดอยู่ อาจไม่ถูกต้อง 100%",
-  ports: "ช่องทาง (พอร์ต) ของบริการเว็บที่เปิดรับการเชื่อมต่อ",
-  php: "อ่านจาก header ที่เว็บตอบกลับ (เช่น X-Powered-By) ถ้าเว็บซ่อนเวอร์ชันไว้จะแสดงว่าไม่พบ",
-  confidence: "ความมั่นใจของผลตรวจ: ยืนยันแล้ว = เห็นเวอร์ชันที่มีช่องโหว่ชัดเจน · ต่ำ = เป็นการคาดการณ์จากข้อมูลบางส่วน",
-  portsPick: "thscan เชื่อมต่อแบบปกติ (TCP connect) ไปยังพอร์ตเหล่านี้บนเครื่องที่ออนไลน์ เพื่อดูว่าเปิดบริการอะไรไว้ ไม่ส่งข้อมูลโจมตี และตรวจพอร์ตเว็บเสมอ",
-  services: "พอร์ตที่เครื่องนี้เปิดรับการเชื่อมต่อ และบริการที่มักใช้พอร์ตนั้น หมายเหตุสีส้มคือข้อควรระวัง ไม่ได้แปลว่ามีช่องโหว่",
-  sites: "ใส่ลิงก์หรือชื่อโดเมน เช่น https://www.agency.go.th ระบบจะค้นหา IP จาก DNS ครั้งเดียว ตรวจว่าเป็นโดเมนหน่วยงาน แล้วสแกน IP ที่ได้โดยระบุชื่อเว็บไปด้วย (ไม่จำกัดว่าต้องอยู่ในขอบเขต LAN)",
-  intercept: "อุปกรณ์อย่าง proxy หรือ firewall บางตัวตอบรับแทนทุกที่อยู่ ทำให้ดูเหมือนมีเครื่องออนไลน์ทุก IP thscan ทดสอบกับที่อยู่ที่ไม่มีจริงก่อนสแกน แล้วตัดผลปลอมเหล่านี้ออก",
-};
+const DS = ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"];
+const gradeCls = (g) => (g === "A" || g === "B" ? "b-ok" : g === "C" ? "b-warn" : "b-bad");
 
-/* ── tooltip (hover, focus, or tap) ─────────────────────────────────── */
+/* ── tooltip shared by every ⓘ (fixed position, never clipped) ──────── */
 const tt = $("#tt");
 let ttFor = null;
+const tip = (text) => `<button type="button" class="tip" data-tip="${esc(text)}" aria-label="คำอธิบาย: ${esc(text)}">i</button>`;
 function showTip(el) {
   ttFor = el; tt.textContent = el.dataset.tip; tt.classList.add("show");
   const r = el.getBoundingClientRect(), w = tt.offsetWidth, h = tt.offsetHeight;
   const x = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
-  let y = r.top - h - 8; if (y < 8) y = r.bottom + 8;
+  let y = r.top - h - 10; if (y < 8) y = r.bottom + 10;
   tt.style.left = `${x}px`; tt.style.top = `${y}px`;
 }
 function hideTip() { ttFor = null; tt.classList.remove("show"); }
-document.addEventListener("mouseover", (e) => { const t = e.target.closest("[data-tip]"); if (t) showTip(t); });
-document.addEventListener("mouseout", (e) => { if (e.target.closest("[data-tip]")) hideTip(); });
-document.addEventListener("focusin", (e) => { const t = e.target.closest("[data-tip]"); t ? showTip(t) : hideTip(); });
+
+/* ── docks: hover opens via CSS; tap/click toggles .open for touch.
+   Only one dock is ever unfolded: hovering one folds any other. ────── */
+function closeDocks(except) {
+  $$(".dock.open").forEach((d) => {
+    if (d === except) return;
+    d.classList.remove("open");
+    const b = $(":scope > [aria-expanded]", d); b && b.setAttribute("aria-expanded", "false");
+  });
+}
+/* keep an unfolding panel inside the viewport (docks near an edge on small screens) */
+function fitFly(d) {
+  const fly = d && $(":scope > .fly", d);
+  if (!fly) return;
+  fly.style.marginLeft = "0px";
+  const r = fly.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+  let dx = 0;
+  if (r.right > vw - 8) dx = vw - 8 - r.right;
+  if (r.left + dx < 8) dx = 8 - r.left;
+  fly.style.marginLeft = `${Math.round(dx)}px`;
+}
+function shut(d) {
+  if (!d) return;
+  closeDocks(); d.classList.add("shut");
+  const peek = $(":scope > [data-dock]", d); peek && peek.focus({ preventScroll: true });
+}
+document.addEventListener("mouseover", (e) => {
+  const t = e.target.closest("[data-tip]"); if (t) showTip(t);
+  const d = e.target.closest(".dock");
+  if (d) { closeDocks(d); if (!d.contains(e.relatedTarget)) fitFly(d); }
+});
+document.addEventListener("mouseout", (e) => {
+  if (e.target.closest("[data-tip]")) hideTip();
+  const d = e.target.closest(".dock.shut");
+  if (d && !d.contains(e.relatedTarget)) d.classList.remove("shut");
+});
+document.addEventListener("focusin", (e) => {
+  const t = e.target.closest("[data-tip]"); t ? showTip(t) : hideTip();
+  const d = e.target.closest(".dock"); if (d && !d.contains(e.relatedTarget)) fitFly(d);
+});
+document.addEventListener("focusout", (e) => { const d = e.target.closest(".dock.shut"); if (d && !d.contains(e.relatedTarget) && !d.matches(":hover")) d.classList.remove("shut"); });
+addEventListener("scroll", hideTip, { passive: true });
 document.addEventListener("click", (e) => {
   const t = e.target.closest(".tip");
-  if (t) { e.preventDefault(); ttFor === t ? hideTip() : showTip(t); } else if (ttFor) hideTip();
+  if (t) { e.preventDefault(); ttFor === t ? hideTip() : showTip(t); return; }
+  if (ttFor) hideTip();
+  const tog = e.target.closest("[data-dock]");
+  if (tog) {
+    const d = tog.closest(".dock"), open = !d.classList.contains("open");
+    closeDocks(d); d.classList.remove("shut"); if (open) fitFly(d); d.classList.toggle("open", open); tog.setAttribute("aria-expanded", String(open));
+    return;
+  }
+  if (!e.target.closest(".dock")) closeDocks();
 });
-addEventListener("scroll", hideTip, { passive: true });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const d = document.activeElement && document.activeElement.closest(".dock"); closeDocks(); hideTip(); if (d) shut(d); } });
+const dock = (id, peek, body, { w = 340, align = "", cls = "" } = {}) => `
+  <div class="dock ${cls}" id="${id}" style="--w:${w}px">
+    ${peek.replace("<button", `<button data-dock aria-expanded="false" aria-controls="${id}-fly"`)}
+    <div class="fly ${align}" id="${id}-fly"><div class="panel">${body}</div></div>
+  </div>`;
 
-/* ── toast + modal ──────────────────────────────────────────────────── */
-let toastTimer;
+/* ── toast, modal, clipboard, count-up ─────────────────────────────── */
+let toastTimer, toastAt = 0;
 function toast(msg) {
-  let el = $(".toast");
-  if (!el) { el = document.createElement("div"); el.className = "toast"; el.setAttribute("role", "status"); document.body.append(el); }
-  el.textContent = msg; el.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
+  const old = $(".toast"); if (old) old.remove();
+  toastAt = Date.now();
+  const el = document.createElement("div"); el.className = "toast"; el.setAttribute("role", "status"); el.textContent = msg;
+  document.body.append(el);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), 4200);
 }
-
-function openModal(html, { label } = {}) {
+function openModal(html, label) {
+  closeDocks(); hideTip();
   const back = document.createElement("div");
   back.className = "modal-back";
-  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="${esc(label || "")}">${html}</div>`;
+  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="${esc(label)}">${html}</div>`;
   const prev = document.activeElement;
   const close = () => { back.remove(); document.removeEventListener("keydown", onKey); prev && prev.focus && prev.focus(); };
   const onKey = (e) => {
     if (e.key === "Escape") close();
-    if (e.key === "Tab") { // keep focus inside the dialog
-      const f = $$("button, a[href], input, select, textarea", back).filter((x) => !x.disabled && x.offsetParent);
+    if (e.key === "Tab") {
+      const f = $$("button, a[href], input", back).filter((x) => !x.disabled);
       if (!f.length) return;
       if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
       else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
@@ -126,23 +172,9 @@ function openModal(html, { label } = {}) {
   back.addEventListener("click", (e) => { if (e.target === back || e.target.closest("[data-close]")) close(); });
   document.addEventListener("keydown", onKey);
   document.body.append(back);
-  const first = $("[autofocus], button.btn-primary, button, input", back); first && first.focus();
+  const first = $("[aria-checked='true'], .btn-g", back); first && first.focus();
   return { el: back, close };
 }
-
-function confirmModal({ title, text, ok, danger }) {
-  return new Promise((resolve) => {
-    const m = openModal(`<h2>${esc(title)}</h2><p>${esc(text)}</p>
-      <div class="modal-foot"><button class="btn btn-secondary" data-close>ยกเลิก</button>
-      <button class="btn ${danger ? "btn-danger" : "btn-primary"}" data-ok>${esc(ok)}</button></div>`, { label: title });
-    let done = false;
-    $("[data-ok]", m.el).addEventListener("click", () => { done = true; m.close(); resolve(true); });
-    const obs = new MutationObserver(() => { if (!m.el.isConnected) { obs.disconnect(); if (!done) resolve(false); } });
-    obs.observe(document.body, { childList: true });
-    $("[data-ok]", m.el).focus();
-  });
-}
-
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch {
     const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
@@ -150,6 +182,14 @@ async function copyText(text) {
     let ok = false; try { ok = document.execCommand("copy"); } catch { /* unsupported */ }
     ta.remove(); return ok;
   }
+}
+function tween(el, to, ms = 900, fmt = num) {
+  if (!el) return;
+  if (reduceMotion()) { el.textContent = fmt(to); el.dataset.v = to; return; }
+  const from = Number(el.dataset.v || 0), t0 = performance.now();
+  el.dataset.v = to;
+  const step = (t) => { const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(Math.round(from + (to - from) * e)); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
 }
 
 /* ── IPv4 math (mirrors app/scanner/ip_utils.py) ────────────────────── */
@@ -162,7 +202,7 @@ function ipToInt(s) {
 }
 const intToIp = (n) => [16777216, 65536, 256, 1].map((d) => Math.floor(n / d) % 256).join(".");
 function cidrBounds(spec) {
-  const [ip, p] = spec.split("/");
+  const [ip, p] = String(spec).split("/");
   const base = ipToInt(ip), prefix = /^\d{1,2}$/.test(p) ? +p : NaN;
   if (base == null || !(prefix >= 0 && prefix <= 32)) return null;
   const size = 2 ** (32 - prefix), net = Math.floor(base / size) * size;
@@ -172,7 +212,7 @@ function specBounds(spec) {
   spec = spec.trim();
   if (spec.includes("/")) {
     const b = cidrBounds(spec);
-    if (!b) throw new Error(`“${spec}” ไม่ใช่ซับเน็ตที่ถูกต้อง (ตัวอย่าง 192.168.1.0/24)`);
+    if (!b) throw new Error(`“${spec}” ไม่ใช่ซับเน็ตที่ถูกต้อง`);
     return b.prefix <= 30 ? [b.net + 1, b.bcast - 1] : [b.net, b.bcast];
   }
   if (spec.includes("-")) {
@@ -182,7 +222,7 @@ function specBounds(spec) {
     if (/^\d{1,3}$/.test(r)) r = l.split(".").slice(0, 3).concat(r).join(".");
     const b = ipToInt(r);
     if (b == null) throw new Error(`จุดสิ้นสุด “${r}” ไม่ใช่ IP ที่ถูกต้อง`);
-    if (b < a) throw new Error("ช่วง IP กลับด้าน — จุดสิ้นสุดต้องมากกว่าจุดเริ่ม");
+    if (b < a) throw new Error("จุดสิ้นสุดต้องไม่น้อยกว่าจุดเริ่ม");
     return [a, b];
   }
   const n = ipToInt(spec);
@@ -190,142 +230,23 @@ function specBounds(spec) {
   return [n, n];
 }
 let allowedNets = [];
-function inScope(a, b) { return allowedNets.some((n) => n.net <= a && b <= n.bcast); }
+const inScope = (a, b) => allowedNets.some((n) => n.net <= a && b <= n.bcast);
 function checkTargets(specs) {
-  const out = { count: 0, first: null, last: null, error: null, outside: [] };
+  const out = { count: 0, error: null, outside: [] };
   if (!specs.length) { out.error = "ยังไม่ได้ระบุเป้าหมาย"; return out; }
   for (const s of specs) {
     let a, b;
     try { [a, b] = specBounds(s); } catch (e) { out.error = e.message; return out; }
     out.count += b - a + 1;
-    out.first = out.first == null ? a : Math.min(out.first, a);
-    out.last = out.last == null ? b : Math.max(out.last, b);
     if (!inScope(a, b)) out.outside.push(s);
   }
   return out;
 }
-function estimate(count, nports = 4) {
-  const conc = (cfg && cfg.max_concurrency) || 50, sockets = (cfg && cfg.max_sockets) || 256;
-  // liveness for every address, then a port check on the ~quarter that are online
-  const secs = Math.ceil(count / conc) * 1.5 + Math.ceil((count * 0.25 * nports) / sockets) * 1.5 + 8;
-  if (secs < 60) return "ไม่ถึง 1 นาที";
-  if (secs < 3600) return `ประมาณ ${Math.ceil(secs / 60)} นาที`;
-  return `ประมาณ ${(secs / 3600).toFixed(1)} ชั่วโมง`;
-}
-
-/* ── app state + router ─────────────────────────────────────────────── */
-let cfg = null;
-let routeToken = 0;
-let cleanup = null;
-const app = $("#app");
-
-async function loadConfig() {
-  if (cfg) return cfg;
-  cfg = await api("/api/config");
-  allowedNets = (cfg.allowed_cidrs || []).map(cidrBounds).filter(Boolean);
-  $("#ver").textContent = `v${cfg.version}`;
-  return cfg;
-}
-
-const routes = [
-  [/^#?\/?$/, viewHome, ""],
-  [/^#\/scan\/([\w-]+)$/, viewScanning, ""],
-  [/^#\/results\/([\w-]+)$/, viewResults, "results"],
-  [/^#\/report\/([\w-]+)$/, viewReport, "results"],
-  [/^#\/latest$/, viewLatest, "results"],
-  [/^#\/history$/, viewHistory, "history"],
-  [/^#\/settings$/, viewSettings, "settings"],
-];
-
-async function route() {
-  if (cleanup) { cleanup(); cleanup = null; }
-  hideTip();
-  const token = ++routeToken;
-  const alive = () => token === routeToken;
-  const hash = location.hash || "#/";
-  const hit = routes.find(([re]) => re.test(hash)) || routes[0];
-  const params = hash.match(hit[0]) || [];
-  $$("[data-nav]").forEach((a) => (a.dataset.nav === hit[2] ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
-  $("#nav").classList.remove("open");
-  $(".nav-toggle").setAttribute("aria-expanded", "false");
-  try {
-    await loadConfig();
-    await hit[1](params.slice(1), alive);
-  } catch (e) {
-    if (!alive()) return;
-    app.innerHTML = `<section class="page"><div class="wrap"><div class="empty">
-      <h3>${e.status === 404 ? "ไม่พบข้อมูลนี้" : "โหลดข้อมูลไม่สำเร็จ"}</h3><p>${esc(e.message)}</p>
-      <p style="margin-top:24px"><a class="btn btn-secondary" href="#/">กลับหน้าแรก</a></p></div></div></section>`;
-  }
-}
-function render(html) { app.innerHTML = html; scrollTo(0, 0); }
-
-$(".nav-toggle").addEventListener("click", (e) => {
-  const open = $("#nav").classList.toggle("open");
-  e.currentTarget.setAttribute("aria-expanded", String(open));
-});
-$("[data-start]").addEventListener("click", (e) => {
-  if ((location.hash || "#/") === "#/" || location.hash === "") {
-    e.preventDefault();
-    const card = $("#scan-card"); card && card.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-});
-addEventListener("hashchange", route);
-
-async function startScan(body) {
-  const job = await api("/api/scans", { method: "POST", body: JSON.stringify(body) });
-  location.hash = `#/scan/${job.id}`;
-}
-
-function openDemoPicker() {
-  const demos = cfg.demos || [];
-  let pick = demos[0] && demos[0].id;
-  const m = openModal(`<h2>ดูตัวอย่างผลการสแกน</h2>
-    <p>เลือกสถานการณ์ตัวอย่าง ระบบจะแสดงผลจาก<strong>ข้อมูลจำลอง</strong> (ไม่ได้สแกนเครือข่ายจริง) เพื่อให้เห็นว่าหน้าผลลัพธ์อ่านอย่างไร</p>
-    <div class="choice-list" role="radiogroup" aria-label="สถานการณ์ตัวอย่าง">
-      ${demos.map((d, i) => `<button type="button" class="choice" role="radio" aria-checked="${i === 0}" data-demo="${esc(d.id)}">
-        <span class="radio"></span><span class="choice-main"><span class="choice-title">${esc(d.name)}</span>
-        <span class="choice-sub">${esc(d.description)}</span></span></button>`).join("")}
-    </div>
-    <div class="modal-foot"><button class="btn btn-secondary" data-close>ยกเลิก</button>
-    <button class="btn btn-primary" data-go>เปิดตัวอย่าง</button></div>`, { label: "ดูตัวอย่างผลการสแกน" });
-  m.el.addEventListener("click", (e) => {
-    const c = e.target.closest("[data-demo]");
-    if (c) { pick = c.dataset.demo; $$("[data-demo]", m.el).forEach((x) => x.setAttribute("aria-checked", String(x === c))); }
-  });
-  $("[data-go]", m.el).addEventListener("click", async (e) => {
-    e.currentTarget.disabled = true;
-    try { await startScan({ demo_scenario: pick }); m.close(); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
-  });
-}
-
-/* ── view: home ─────────────────────────────────────────────────────── */
-const pick = {
-  target: "net", // net = IP / network · site = website by link
-  mode: "auto", auto: null, kind: "subnet",
-  oct: { subnet: ["", "", "", ""], range: ["", "", "", ""], single: ["", "", "", ""] },
-  prefix: 24, rangeEnd: "", text: "",
-  sitesText: "", siteReport: null, siteFor: "",
-  profile: "common", customPorts: "",
-};
-const PREFIXES = [30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 16];
-const hostsFor = (p) => (p >= 31 ? 2 ** (32 - p) : 2 ** (32 - p) - 2);
-
-function pickTargets() {
-  if (pick.mode === "auto") return pick.auto ? [pick.auto] : [];
-  const ip = (k) => (pick.oct[k].every((o) => o !== "") ? pick.oct[k].join(".") : null);
-  if (pick.kind === "subnet") { const a = ip("subnet"); return a ? [`${a}/${pick.prefix}`] : []; }
-  if (pick.kind === "range") { const a = ip("range"); return a && pick.rangeEnd !== "" ? [`${a}-${pick.rangeEnd}`] : []; }
-  if (pick.kind === "single") { const a = ip("single"); return a ? [a] : []; }
-  return pick.text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 64);
-}
-
-const siteList = () => pick.sitesText.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean).slice(0, (cfg && cfg.max_sites) || 20);
-
-/* mirrors app/scanner/ports.py parse_ports: returns { n } or { error } */
+/* mirrors app/scanner/ports.py parse_ports → { n } or { error } */
 function countPorts(spec) {
-  const set = new Set(), max = (cfg && cfg.max_custom_ports) || 1024;
-  for (const raw of spec.split(/[\s,;]+/)) {
+  const set = new Set(cfg.web_ports || []), max = cfg.max_custom_ports || 1024;
+  let any = false;
+  for (const raw of String(spec).split(/[\s,;]+/)) {
     if (!raw) continue;
     const m = raw.match(/^(\d{1,5})(?:-(\d{1,5}))?$/);
     if (!m) return { error: `พอร์ตไม่ถูกต้อง: ${raw}` };
@@ -334,308 +255,254 @@ function countPorts(spec) {
     if (b < a) return { error: `ช่วงพอร์ตกลับด้าน: ${raw}` };
     if (b - a + 1 > max) return { error: `ระบุพอร์ตได้ไม่เกิน ${num(max)} พอร์ต` };
     for (let p = a; p <= b; p++) set.add(p);
-    if (set.size > max) return { error: `ระบุพอร์ตได้ไม่เกิน ${num(max)} พอร์ต` };
+    any = true;
+    if (set.size > max + 8) return { error: `ระบุพอร์ตได้ไม่เกิน ${num(max)} พอร์ต` };
   }
-  if (!set.size) return { error: "ยังไม่ได้ระบุพอร์ต" };
-  (cfg.web_ports || []).forEach((p) => set.add(p));
-  return { n: set.size };
+  return any ? { n: set.size } : { error: "ยังไม่ได้ระบุพอร์ต" };
 }
-function portCount(profile = pick.profile, custom = pick.customPorts) {
+function portCount(profile, custom) {
   if (profile === "custom") return countPorts(custom);
   const p = (cfg.port_profiles || []).find((x) => x.id === profile);
   return { n: p && p.ports ? p.ports.length : 0 };
 }
-function portPicker(id = "pp", profile = pick.profile, custom = pick.customPorts) {
-  return `<div class="port-pick">
-    <div><label class="field-label" for="${id}">พอร์ตที่ตรวจในแต่ละเครื่อง ${tip(TIPS.portsPick)}</label>
-    <select class="select" id="${id}" name="port_profile">${(cfg.port_profiles || []).map((p) => `<option value="${p.id}" ${p.id === profile ? "selected" : ""}>
-      ${esc(p.label)}${p.ports ? ` · ${num(p.ports.length)} พอร์ต` : ""}</option>`).join("")}</select></div>
-    <div class="grow" data-custom-ports ${profile === "custom" ? "" : "hidden"}><label class="field-label" for="${id}-custom">พอร์ตที่ต้องการ</label>
-    <input class="input mono" id="${id}-custom" name="custom_ports" value="${esc(custom)}" autocomplete="off" spellcheck="false" placeholder="เช่น 22, 80, 8000-8100" style="width:100%"></div>
-  </div>`;
-}
-function portLine(count) {
-  const pc = portCount();
-  if (pc.error) return { ok: false, html: `<div class="plan-line bad">${icon("x")}<span>${esc(pc.error)}</span></div>` };
-  if (count * pc.n > cfg.max_port_probes) return { ok: false, html: `<div class="plan-line bad">${icon("x")}<span>งานใหญ่เกินไป (${num(count)} ที่อยู่ × ${num(pc.n)} พอร์ต) — ลดขนาดวงหรือจำนวนพอร์ตลง</span></div>` };
-  return { ok: true, n: pc.n, html: `<div class="plan-line ok">${icon("list")}<span>ตรวจ <strong>${num(pc.n)}</strong> พอร์ตในแต่ละเครื่องที่ออนไลน์</span></div>` };
+const PROFILE_TEXT = {
+  web: ["เฉพาะเว็บ", "พอร์ตเว็บอย่างเดียว · เร็วที่สุด"],
+  common: ["ใช้บ่อย", "ครอบคลุมบริการหลัก เช่น SSH, RDP, ฐานข้อมูล"],
+  top100: ["ยอดนิยม", "100 พอร์ตที่พบบ่อยที่สุด · ละเอียดขึ้น"],
+  custom: ["กำหนดเอง", "ระบุพอร์ตเอง เช่น 22, 80, 8000-8100"],
+};
+const profileOpts = (attr, cur) => (cfg.port_profiles || []).map((p) => `<button type="button" class="opt" ${attr}="${p.id}" aria-pressed="${cur === p.id}" style="margin-top:8px">
+  <span style="flex:1;min-width:0"><span class="ot">${esc((PROFILE_TEXT[p.id] || [p.label])[0])}${p.ports ? ` · ${num(p.ports.length)} พอร์ต` : ""}</span><span class="od">${esc((PROFILE_TEXT[p.id] || ["", ""])[1])}</span></span>
+  ${p.id === "common" ? '<span class="badge b-blue">แนะนำ</span>' : ""}</button>`).join("");
+
+/* ── app state + router ─────────────────────────────────────────────── */
+let cfg = null;
+let routeToken = 0;
+let cleanups = [];
+const app = $("#app");
+const onCleanup = (fn) => cleanups.push(fn);
+
+async function loadConfig() {
+  if (cfg) return cfg;
+  cfg = await api("/api/config");
+  allowedNets = (cfg.allowed_cidrs || []).map(cidrBounds).filter(Boolean);
+  return cfg;
 }
 
-function octets(name, label) {
-  return `<div><span class="field-label" id="lbl-${name}">${label}</span>
-    <div class="ip-field" role="group" aria-labelledby="lbl-${name}">
-    ${pick.oct[name].map((v, i) => `${i ? '<span class="dot">.</span>' : ""}<input inputmode="numeric" autocomplete="off" maxlength="3"
-      data-oct="${name}" data-i="${i}" value="${esc(v)}" aria-label="${label} ส่วนที่ ${i + 1}" placeholder="0">`).join("")}
-    </div></div>`;
-}
+const routes = [
+  [/^#?\/?$/, viewScan, "scan"],
+  [/^#\/scan\/([\w-]+)$/, viewScanning, "scan"],
+  [/^#\/results\/([\w-]+)$/, viewResults, "results"],
+  [/^#\/latest$/, viewLatest, "results"],
+  [/^#\/report\/latest$/, viewReportLatest, "report"],
+  [/^#\/report\/([\w-]+)$/, viewReport, "report"],
+  [/^#\/history$/, viewHistory, "history"],
+  [/^#\/settings$/, viewSettings, "settings"],
+];
 
-function customPanel() {
-  const k = pick.kind;
-  const seg = [["subnet", "ทั้งวง (ซับเน็ต)"], ["range", "ช่วง IP"], ["single", "เครื่องเดียว"], ["text", "พิมพ์เอง"]]
-    .map(([id, t]) => `<button type="button" data-kind="${id}" aria-pressed="${k === id}">${t}</button>`).join("");
-  let row = "";
-  if (k === "subnet") {
-    row = `${octets("subnet", "ที่อยู่เครือข่าย")}
-      <div><label class="field-label" for="prefix">ขนาดวง ${tip("/24 คือวงขนาดปกติของสำนักงาน (254 เครื่อง) ยิ่งเลขน้อย วงยิ่งใหญ่")}</label>
-      <select class="select" id="prefix">${PREFIXES.map((p) => `<option value="${p}" ${p === pick.prefix ? "selected" : ""}>/${p} · ${num(hostsFor(p))} เครื่อง</option>`).join("")}</select></div>`;
-  } else if (k === "range") {
-    const o = pick.oct.range;
-    row = `${octets("range", "จาก")}
-      <div><label class="field-label" for="range-end">ถึง</label>
-      <div class="ip-field"><span class="mono muted" id="range-prefix">${esc(o.slice(0, 3).map((x) => x || "_").join("."))}.</span>
-      <input id="range-end" inputmode="numeric" autocomplete="off" maxlength="3" value="${esc(pick.rangeEnd)}" placeholder="254" aria-label="ส่วนสุดท้ายของ IP ปลายทาง"></div></div>`;
-  } else if (k === "single") {
-    row = octets("single", "IP ของเครื่อง");
-  } else {
-    row = `<div style="flex:1 1 100%"><label class="field-label" for="free">เป้าหมาย (คั่นหลายรายการด้วยจุลภาค)</label>
-      <input class="input" id="free" style="width:100%" autocomplete="off" spellcheck="false" value="${esc(pick.text)}"
-        placeholder="เช่น 10.0.5.0/24, 10.0.6.10-50, 10.0.7.3"></div>`;
+async function route() {
+  cleanups.forEach((f) => { try { f(); } catch { /* ignore */ } }); cleanups = [];
+  hideTip(); closeDocks();
+  // a toast from the page being left would cover the next one; keep only a fresh one
+  if (Date.now() - toastAt > 1000) { const t = $(".toast"); if (t) t.remove(); }
+  const token = ++routeToken, alive = () => token === routeToken;
+  const hash = location.hash || "#/";
+  const hit = routes.find(([re]) => re.test(hash)) || routes[0];
+  const params = hash.match(hit[0]) || [];
+  $$("[data-nav]").forEach((a) => (a.dataset.nav === hit[2] ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
+  setTopSide("");
+  try {
+    await loadConfig();
+    await hit[1](params.slice(1), alive);
+  } catch (e) {
+    if (!alive()) return;
+    render(`<div class="app thin"><div class="card in1" style="padding:32px;text-align:center">
+      <h1 class="h1" style="font-size:24px">${e.status === 404 ? "ไม่พบข้อมูลนี้" : "โหลดข้อมูลไม่สำเร็จ"}</h1>
+      <p class="lead">${esc(e.message)}</p><p style="margin-top:18px"><a class="btn" href="#/">กลับหน้าสแกน</a></p></div></div>`);
   }
-  const chips = (cfg.allowed_cidrs || []).map((c) => `<button type="button" class="chip" data-fill="${esc(c)}">${esc(c)}</button>`).join("");
-  return `<div class="seg" role="group" aria-label="รูปแบบเป้าหมาย">${seg}</div>
-    <div class="ip-row">${row}</div>
-    ${chips ? `<div class="chips"><span class="field-label" style="margin:6px 4px 0 0">ช่วงที่อนุญาต ${tip(TIPS.scope)}</span>${chips}</div>` : ""}`;
 }
+function render(html) { app.innerHTML = html; scrollTo(0, 0); fitAll(); }
+// folded panels still take up layout space, so place them inside the viewport up front
+const fitAll = () => [...$$(".dock"), $("#top-side")].forEach((d) => d && d.classList.contains("dock") && fitFly(d));
+let fitTimer;
+addEventListener("resize", () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitAll, 150); });
+function setTopSide(html) { $("#top-side").innerHTML = html; }
+addEventListener("hashchange", route);
 
-function planHTML() {
-  const wrap = (lines) => `<div class="plan" aria-live="polite">${lines.join("")}</div>`;
-  const info = (t) => wrap([`<div class="plan-line">${icon("info")}<span>${t}</span></div>`]);
-  if (pick.target === "site") {
-    const list = siteList();
-    if (!list.length) return info("วางลิงก์เว็บไซต์ของหน่วยงาน ระบบจะตรวจ DNS และขอบเขตให้ทันที");
-    if (pick.siteFor !== list.join("\n") || !pick.siteReport) return info("กำลังตรวจสอบลิงก์…");
-    const lines = pick.siteReport.map((r) => r.problems.length
-      ? `<div class="plan-line bad">${icon("x")}<span>${esc(r.problems.join(" · "))}</span></div>`
-      : `<div class="plan-line ok">${icon("check")}<span><strong>${esc(r.host)}</strong> → <span class="mono">${esc(r.ips.join(", "))}</span></span></div>`);
-    const ips = new Set(pick.siteReport.flatMap((r) => r.ips)).size;
-    const pl = portLine(ips); lines.push(pl.html);
-    if (pl.ok && pick.siteReport.every((r) => !r.problems.length)) lines.push(`<div class="plan-line ok">${icon("clock")}<span>ใช้เวลา${estimate(ips, pl.n)}</span></div>`);
-    return wrap(lines);
-  }
-  const specs = pickTargets();
-  if (!specs.length) return info(pick.mode === "custom" ? "กรอกเป้าหมายให้ครบเพื่อดูสรุปก่อนสแกน" : "เลือกเครือข่ายที่ต้องการตรวจ");
-  const c = checkTargets(specs);
-  if (c.error) return wrap([`<div class="plan-line bad">${icon("x")}<span>${esc(c.error)}</span></div>`]);
-  const lines = [`<div class="plan-line ok">${icon("server")}<span>จะตรวจ <strong>${num(c.count)}</strong> ที่อยู่ · <span class="mono">${intToIp(c.first)}${c.last !== c.first ? ` – ${intToIp(c.last)}` : ""}</span></span></div>`];
-  if (c.outside.length) lines.push(`<div class="plan-line bad">${icon("x")}<span>อยู่นอกขอบเขตที่อนุญาต ${tip(TIPS.scope)} — ระบบนี้สแกนได้เฉพาะ ${esc((cfg.allowed_cidrs || []).join(", ") || "(ยังไม่ได้ตั้ง)")}</span></div>`);
-  else lines.push(`<div class="plan-line ok">${icon("lock")}<span>อยู่ในขอบเขตที่ผู้ดูแลระบบอนุญาต ${tip(TIPS.scope)}</span></div>`);
-  const pl = portLine(c.count); lines.push(pl.html);
-  if (c.count > cfg.max_targets) lines.push(`<div class="plan-line bad">${icon("x")}<span>เกินจำนวนสูงสุด ${num(cfg.max_targets)} ที่อยู่ต่อครั้ง — ลดขนาดวงลง</span></div>`);
-  else if (!c.outside.length && pl.ok) lines.push(`<div class="plan-line ok">${icon("clock")}<span>ใช้เวลา${estimate(c.count, pl.n)} ${tip("ขึ้นกับจำนวนเครื่องที่ออนไลน์และความเร็วเครือข่าย")}</span></div>`);
-  return wrap(lines);
+async function startScan(body) {
+  const job = await api("/api/scans", { method: "POST", body: JSON.stringify(body) });
+  location.hash = `#/scan/${job.id}`;
 }
-function planOk() {
-  if (pick.target === "site") {
-    const list = siteList();
-    if (!list.length || pick.siteFor !== list.join("\n") || !pick.siteReport) return false;
-    if (pick.siteReport.some((r) => r.problems.length)) return false;
-    return portLine(new Set(pick.siteReport.flatMap((r) => r.ips)).size).ok;
-  }
-  const specs = pickTargets();
-  if (!specs.length) return false;
-  const c = checkTargets(specs);
-  return !c.error && !c.outside.length && c.count <= cfg.max_targets && portLine(c.count).ok;
-}
-let resolveTimer;
-function scheduleResolve(after) {
-  clearTimeout(resolveTimer);
-  const list = siteList(), key = list.join("\n");
-  if (!list.length) { pick.siteReport = null; pick.siteFor = ""; after(); return; }
-  if (key === pick.siteFor) { after(); return; }
-  resolveTimer = setTimeout(async () => {
-    let report;
-    try { report = (await api(`/api/resolve?q=${encodeURIComponent(key)}`)).sites; }
-    catch (e) { report = [{ input: key, host: null, ips: [], problems: [e.message] }]; }
-    if (siteList().join("\n") !== key) return; // the text changed meanwhile
-    pick.siteReport = report; pick.siteFor = key;
-    after();
-  }, 450);
-  after();
-}
-
-async function viewHome(_, alive) {
-  const [auto, jobs] = await Promise.all([
-    api("/api/autodetect").catch(() => ({ subnets: [] })),
-    api("/api/scans").catch(() => []),
-  ]);
-  if (!alive()) return;
-  const subnets = (auto.subnets || []).map((s) => {
-    const b = cidrBounds(s.cidr);
-    return { ...s, ok: !!b && inScope(b.net, b.bcast), hosts: b ? hostsFor(b.prefix) : 0 };
+function openDemoPicker() {
+  const demos = cfg.demos || [];
+  let pick = demos[0] && demos[0].id;
+  const m = openModal(`<h2>ดูตัวอย่างผลการสแกน</h2>
+    <p class="lead">เลือกสถานการณ์ ระบบจะแสดงผลจาก<b>ข้อมูลจำลอง</b> (ไม่ได้สแกนเครือข่ายจริง) เพื่อให้เห็นว่าหน้าผลลัพธ์อ่านอย่างไร</p>
+    <div role="radiogroup" aria-label="สถานการณ์ตัวอย่าง" style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+      ${demos.map((d, i) => `<button type="button" class="opt" role="radio" aria-pressed="${i === 0}" aria-checked="${i === 0}" data-demo="${esc(d.id)}">
+        <span class="oi">${ic("plate")}</span><span style="min-width:0"><span class="ot">${esc(d.name)}</span><span class="od">${esc(d.description)}</span></span></button>`).join("")}
+    </div>
+    <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="button" class="btn btn-g" data-go>เปิดตัวอย่าง ${ic("arrow", 17)}</button></div>`, "ดูตัวอย่างผลการสแกน");
+  m.el.addEventListener("click", (e) => {
+    const c = e.target.closest("[data-demo]");
+    if (c) { pick = c.dataset.demo; $$("[data-demo]", m.el).forEach((x) => { x.setAttribute("aria-pressed", String(x === c)); x.setAttribute("aria-checked", String(x === c)); }); }
   });
-  if (pick.auto == null) {
-    const first = subnets.find((s) => s.ok);
-    if (first) pick.auto = first.cidr;
+  $("[data-go]", m.el).addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true;
+    try { await startScan({ demo_scenario: pick }); m.close(); } catch (err) { toast(err.message); b.disabled = false; }
+  });
+}
+
+/* ═══ view: scan ═══════════════════════════════════════════════════════ */
+const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
+  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, report: null, reportFor: "", detected: [] };
+const MODES = [
+  ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
+  ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์ของหน่วยงาน", "globe"],
+  ["text", "พิมพ์เอง", "หลายรายการคั่นด้วยจุลภาค", "lines"],
+];
+const siteList = () => S.site.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean).slice(0, cfg.max_sites || 20);
+const hostsFor = (p) => (p >= 31 ? 2 ** (32 - p) : 2 ** (32 - p) - 2);
+const detect = (subnets) => (subnets || []).map((s) => { const b = cidrBounds(s.cidr); return { ...s, ok: !!b && inScope(b.net, b.bcast), hosts: b ? hostsFor(b.prefix) : 0 }; });
+
+function scanPlan() {
+  const okOct = (o) => o.every((x) => x !== "" && +x <= 255);
+  const ip = (o) => o.map((x) => String(+x)).join(".");  // "01" → "1": the server rejects leading zeros
+  const plan = { valid: true, scoped: true, pending: false, count: 0, label: "", big: "", sub: "", summary: "", body: null, reason: "" };
+  if (S.mode === "site") {
+    const list = siteList();
+    const fresh = S.reportFor === list.join("\n") && S.report;
+    plan.valid = list.length > 0;
+    plan.label = "เว็บไซต์"; plan.big = list.length > 1 ? `${list.length} เว็บไซต์` : (list[0] || "—").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    plan.summary = `เว็บไซต์ · ${plan.big}`;
+    if (!plan.valid) plan.reason = "วางลิงก์เว็บไซต์ก่อน";
+    else if (!fresh) { plan.pending = true; plan.reason = "กำลังตรวจสอบลิงก์…"; plan.sub = "กำลังค้นหา IP จาก DNS…"; }
     else {
-      pick.mode = "custom";
-      const a = allowedNets[0];
-      if (a) { pick.oct.subnet = intToIp(a.net).split("."); pick.prefix = Math.max(a.prefix, 24); }
+      const bad = S.report.filter((r) => r.problems.length);
+      plan.count = new Set(S.report.flatMap((r) => r.ips)).size;
+      plan.scoped = !bad.length;
+      plan.sub = plan.scoped ? S.report.map((r) => `${r.host} → ${r.ips.join(", ")}`).join(" · ") : bad[0].problems[0];
+      if (!plan.scoped) plan.reason = bad[0].refused ? "ตรวจได้เฉพาะโดเมนหน่วยงาน" : bad[0].problems[0];
     }
+    plan.body = { sites: list };
+    return plan;
   }
+  let specs = [];
+  if (S.mode === "subnet") {
+    plan.valid = okOct(S.oct);
+    if (plan.valid) { const b = cidrBounds(`${ip(S.oct)}/${S.prefix}`); specs = [`${intToIp(b.net)}/${S.prefix}`]; plan.sub = `${intToIp(b.net + 1)} ถึง ${intToIp(b.bcast - 1)}`; }
+    plan.label = "ขนาดวง"; plan.big = `/${S.prefix}`; plan.summary = `ทั้งวง · ${specs[0] || "กรอกให้ครบ"}`;
+  } else if (S.mode === "range") {
+    const base = ip(S.oct.slice(0, 3));
+    plan.valid = okOct(S.oct) && S.rs !== "" && S.re !== "" && +S.rs <= +S.re && +S.re <= 255;
+    specs = plan.valid ? [`${base}.${+S.rs}-${+S.re}`] : [];
+    plan.label = "ช่วงที่ตรวจ"; plan.big = `${S.rs || "?"} – ${S.re || "?"}`; plan.sub = `${base}.${S.rs} ถึง ${base}.${S.re}`; plan.summary = `ช่วง · ${base}.${S.rs}–${S.re}`;
+  } else if (S.mode === "single") {
+    plan.valid = okOct(S.single); specs = plan.valid ? [ip(S.single)] : [];
+    plan.label = "เครื่องเดียว"; plan.big = S.single.join("."); plan.sub = "ตรวจละเอียดเฉพาะเครื่องนี้"; plan.summary = `เครื่องเดียว · ${S.single.join(".")}`;
+  } else {
+    specs = S.text.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean).slice(0, 64);
+    plan.label = "พิมพ์เอง"; plan.big = `${specs.length} รายการ`; plan.summary = `พิมพ์เอง · ${specs.length} รายการ`;
+  }
+  const c = checkTargets(specs);
+  if (c.error) { plan.valid = false; plan.reason = c.error; if (S.mode === "text") plan.sub = c.error; }
+  else {
+    plan.count = c.count; plan.scoped = !c.outside.length;
+    if (!plan.scoped) plan.reason = `อยู่นอกขอบเขตที่อนุญาต (${(cfg.allowed_cidrs || []).join(", ")})`;
+    if (S.mode === "text") plan.sub = specs.join(", ");
+  }
+  if (!plan.valid && !plan.reason) plan.reason = "กรอกเป้าหมายให้ครบ (0–255)";
+  if (plan.valid && plan.count > cfg.max_targets) { plan.scoped = false; plan.reason = `เกินจำนวนสูงสุด ${num(cfg.max_targets)} ที่อยู่ต่อครั้ง`; }
+  plan.body = { targets: specs };
+  return plan;
+}
 
-  render(`
-  <section class="hero"><div class="wrap hero-grid">
-    <div>
-      <p class="eyebrow">ใช้ฟรี · ติดตั้งในหน่วยงานของคุณเอง</p>
-      <h1><span class="nw">ตรวจเว็บใน</span><span class="nw">เครือข่ายของคุณ</span> <span class="nw">ว่าเสี่ยง PHP2Shell</span> <span class="nw">หรือไม่</span></h1>
-      <p class="lede">สแกนทั้งวงเครือข่ายหรือวางลิงก์เว็บไซต์ของหน่วยงาน thscan จะดูว่าแต่ละเครื่องเปิดพอร์ตอะไรไว้ อ่านเวอร์ชัน PHP แล้วบอกเป็นภาษาไทยว่าเครื่องไหนต้องแก้ก่อน และแก้อย่างไร</p>
-      <ul class="checks">
-        <li>${icon("check")}<span><b>ไม่ทำลายระบบ</b> — อ่านเฉพาะข้อมูลที่เว็บตอบกลับตามปกติ ไม่ส่งโค้ดโจมตี</span></li>
-        <li>${icon("check")}<span><b>สแกนได้เฉพาะขอบเขตที่กำหนด</b> — ผู้ติดตั้งกำหนดช่วง IP ไว้ ผู้ใช้ขยายเองไม่ได้</span></li>
-        <li>${icon("check")}<span><b>ผลบวกลวงต่ำ</b> — ตัดเครื่องที่ไม่มีอยู่จริงออก เช่น ผลที่ proxy ตอบแทน</span></li>
-      </ul>
+async function viewScan(_, alive) {
+  const auto = await api("/api/autodetect").catch(() => ({ subnets: [] }));
+  if (!alive()) return;
+  S.detected = detect(auto.subnets);
+  if (!S.init) {
+    S.init = true; S.speed = cfg.max_concurrency;
+    const first = S.detected.find((s) => s.ok);
+    const b = first ? cidrBounds(first.cidr) : allowedNets[0];
+    if (b) { S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(first ? b.prefix : 24, 16)); S.single = intToIp(b.net + 1).split("."); }
+  }
+  setTopSide(`<button type="button" class="ghost" id="demo-btn">ดูตัวอย่างผล ↗</button>`);
+  $("#demo-btn").addEventListener("click", openDemoPicker);
+
+  render(`<div class="app narrow">
+  <div class="in1" style="text-align:center">
+    <h1 class="h1">ตรวจเครือข่ายของคุณ <span class="gtext">ได้ในคลิกเดียว</span></h1>
+    <p class="lead">ระบบเลือกค่าที่เหมาะให้แล้ว · ชี้ที่แถบด้านล่างเมื่อต้องการปรับ · อ่านอย่างเดียว ไม่ทำลายระบบ</p>
+  </div>
+  <div class="tools in2" style="margin-top:22px">
+    ${dock("d-target", `<button type="button" class="peek"><span class="ic">1</span><span style="min-width:0"><span class="k">เป้าหมาย</span><span class="v" id="sum-target"></span></span>${chev}</button>`, `<div id="p-target"></div>`, { w: 520 })}
+    ${dock("d-ports", `<button type="button" class="peek"><span class="ic">2</span><span style="min-width:0"><span class="k">พอร์ตที่ตรวจ</span><span class="v" id="sum-ports"></span></span>${chev}</button>`, `<div id="p-ports"></div>`, { w: 380, align: "mid" })}
+    ${dock("d-adv", `<button type="button" class="peek"><span class="ic grey">${ic("sliders", 19)}</span><span style="min-width:0"><span class="k">ขั้นสูง</span><span class="v" id="sum-adv"></span></span>${chev}</button>`, `<div id="p-adv"></div>`, { w: 340, align: "end" })}
+  </div>
+  <section class="card stage in3" aria-label="ตัวอย่างเป้าหมาย" style="margin-top:16px;padding:16px 24px 26px;text-align:center">
+    <div id="stage-wrap" class="swap${S.swap}" style="position:relative;max-width:420px;margin:0 auto">${stageSvg()}
+      <input class="ringin" id="ringin" type="range" min="16" max="30" step="1" aria-label="ขนาดวงเครือข่าย ลากเพื่อเปลี่ยน">
     </div>
-    <div class="scan-card" id="scan-card">
-      <h2>จะตรวจอะไร?</h2>
-      <div class="seg seg-full" role="group" aria-label="ประเภทเป้าหมาย">
-        <button type="button" data-target="net" aria-pressed="${pick.target === "net"}">${icon("server")}เครือข่าย (IP)</button>
-        <button type="button" data-target="site" aria-pressed="${pick.target === "site"}">${icon("search")}เว็บไซต์ (ลิงก์)</button>
-      </div>
-      <div id="t-site" ${pick.target === "site" ? "" : "hidden"}>
-        <label class="field-label" for="sites" style="margin-top:20px">ลิงก์หรือโดเมนเว็บไซต์ (บรรทัดละ 1 เว็บ) ${tip(TIPS.sites)}</label>
-        <textarea class="input textarea" id="sites" rows="3" spellcheck="false" autocomplete="off"
-          placeholder="https://www.agency.go.th&#10;eservice.agency.go.th">${esc(pick.sitesText)}</textarea>
-        <p class="hint">ตรวจได้เฉพาะโดเมนหน่วยงาน (${esc((cfg.gov_suffixes || []).join(", "))}) — สแกน IP ที่โดเมนชี้ไป ไม่ว่าจะเป็น IP ภายในหรือสาธารณะ</p>
-      </div>
-      <div id="t-net" ${pick.target === "net" ? "" : "hidden"}>
-      <p class="hint" style="margin-top:16px">ระบบหาวงเครือข่ายของเครื่องนี้ให้แล้ว เลือกได้เลยโดยไม่ต้องพิมพ์</p>
-      <div class="choice-list" role="radiogroup" aria-label="เครือข่ายที่จะสแกน">
-        ${subnets.map((s) => `<button type="button" class="choice" role="radio" data-auto="${esc(s.cidr)}" ${s.ok ? "" : "disabled"}
-            aria-checked="${pick.mode === "auto" && pick.auto === s.cidr}">
-          <span class="radio"></span><span class="choice-main"><span class="choice-title">${esc(s.name)}</span>
-          <span class="choice-sub mono">${esc(s.cidr)}</span></span>
-          <span class="choice-meta">${s.ok ? `${num(s.hosts)} เครื่อง` : "นอกขอบเขต"}</span></button>`).join("")}
-        <button type="button" class="choice" role="radio" data-custom aria-checked="${pick.mode === "custom"}">
-          <span class="radio"></span><span class="choice-main"><span class="choice-title">ระบุเป้าหมายเอง</span>
-          <span class="choice-sub">ซับเน็ต ช่วง IP หรือเครื่องเดียว</span></span></button>
-      </div>
-      <div class="custom" id="custom" ${pick.mode === "custom" ? "" : "hidden"}>${customPanel()}</div>
-      </div>
-      <div class="ports-sec" id="ports-sec">${portPicker()}</div>
-      <div id="plan">${planHTML()}</div>
-      <div class="card-actions">
-        <button class="btn btn-primary btn-lg btn-block" id="go" ${planOk() ? "" : "disabled"}>เริ่มสแกน ${icon("arrow")}</button>
-        <p class="form-error" id="go-err" role="alert" hidden></p>
-        <button type="button" class="link" id="demo-link">ยังไม่พร้อม? ดูตัวอย่างผลการสแกนก่อน</button>
-      </div>
+    <div class="dial-ctl">
+      <button type="button" class="round hov" id="bigger" aria-label="ขยายวงให้ใหญ่ขึ้น">−</button>
+      <div style="min-width:0"><div class="k" id="v-label"></div><div class="big" id="v-big"></div></div>
+      <button type="button" class="round hov" id="smaller" aria-label="ย่อวงให้เล็กลง">+</button>
     </div>
-  </div></section>
-
-  <section class="section band"><div class="wrap">
-    <div class="section-head"><p class="eyebrow">วิธีใช้งาน</p><h2>เสร็จใน 3 ขั้นตอน ไม่ต้องมีความรู้ด้านเครือข่าย</h2></div>
-    <ol class="steps">
-      <li class="step"><h3>เลือกเป้าหมาย</h3><p>เลือกวงเครือข่ายที่ระบบหาให้ หรือวางลิงก์เว็บไซต์ของหน่วยงาน แล้วเลือกชุดพอร์ตที่จะตรวจ</p></li>
-      <li class="step"><h3>รอผลสักครู่</h3><p>ตรวจเฉพาะเครื่องที่ออนไลน์ วงขนาด 254 เครื่องมักใช้เวลาไม่กี่นาที</p></li>
-      <li class="step"><h3>แก้ตามลำดับ</h3><p>เครื่องที่ต้องแก้ด่วนขึ้นก่อน พร้อมขั้นตอนแก้ไข แล้วกดตรวจซ้ำเพื่อยืนยัน</p></li>
-    </ol>
-  </div></section>
-
-  <section class="section"><div class="wrap">
-    <div class="section-head"><p class="eyebrow">ความปลอดภัย</p><h2>ออกแบบให้ปลอดภัยต่อเครือข่ายของคุณ</h2>
-      <p>thscan เป็นเครื่องมือคัดกรอง ไม่ใช่เครื่องมือโจมตี ทุกการตรวจใช้การเชื่อมต่อปกติแบบเดียวกับที่เบราว์เซอร์ทำ</p></div>
-    <div class="features">
-      <div class="feature"><span class="ico">${icon("eye")}</span><h3>อ่านอย่างเดียว</h3><p>ขอหน้าเว็บตามปกติแล้วอ่าน header ไม่ส่งข้อมูลอันตราย ไม่เปลี่ยนแปลงอะไรบนเครื่องปลายทาง</p></div>
-      <div class="feature"><span class="ico">${icon("lock")}</span><h3>ขอบเขตกำหนดตอนติดตั้ง</h3><p>ช่วง IP ที่สแกนได้ถูกล็อกไว้ที่ฝั่งเซิร์ฟเวอร์ เป้าหมายนอกช่วงจะถูกปฏิเสธเสมอ</p></div>
-      <div class="feature"><span class="ico">${icon("check")}</span><h3>กรองผลปลอม</h3><p>ทดสอบกับที่อยู่ที่ไม่มีจริงก่อนสแกน ถ้า proxy หรือ firewall ตอบแทน ระบบจะตัดผลเหล่านั้นออก</p></div>
-      <div class="feature"><span class="ico">${icon("server")}</span><h3>ทำงานได้แม้ไม่มีอินเทอร์เน็ต</h3><p>ทุกไฟล์อยู่ในเครื่องที่ติดตั้ง ไม่โหลดสคริปต์หรือฟอนต์จากภายนอก ข้อมูลไม่ออกนอกหน่วยงาน</p></div>
-      <div class="feature"><span class="ico">${icon("clock")}</span><h3>ตั้งเวลาตรวจอัตโนมัติ</h3><p>ตั้งให้สแกนทุกคืนหรือทุกสัปดาห์ แล้วเปิดดูผลได้จากประวัติ</p></div>
-      <div class="feature"><span class="ico">${icon("list")}</span><h3>ตรวจพอร์ตและบริการ</h3><p>ดูว่าแต่ละเครื่องเปิดพอร์ตอะไร เช่น RDP หรือฐานข้อมูล พร้อมคำแนะนำภาษาไทย แล้วส่งออกเป็น CSV หรือรายงานได้</p></div>
+    <p style="margin-top:2px;font-size:14px;color:var(--muted);overflow-wrap:anywhere"><b class="num" id="v-count" style="color:var(--ink)">0</b> <span id="v-sub"></span></p>
+    <p class="hov" id="v-hint" style="margin-top:4px;font-size:12.5px;color:var(--muted)">ลากวงแหวน หรือกด − / + เพื่อปรับขนาดวง</p>
+    <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;margin-top:20px">
+      ${dock("d-ready", `<button type="button" class="peek" style="width:auto;min-width:240px;max-width:min(420px,100%);padding-right:14px"><span class="ic" id="ready-ic" style="width:34px;height:34px;border-radius:50%"></span><span style="min-width:0;text-align:left"><span class="k" id="ready-k"></span><span class="v" id="ready-v"></span></span></button>`, `<div id="p-ready" style="text-align:left"></div>`, { w: 340, align: "mid" })}
+      <button type="button" class="go" id="go">เริ่มสแกน${ic("arrow", 20, 2.2)}</button>
     </div>
-  </div></section>
+  </section></div>`);
 
-  ${jobs.length ? `<section class="section band"><div class="wrap">
-    <div class="page-head" style="margin-bottom:24px"><div><p class="eyebrow">งานล่าสุด</p><h2 style="font-size:var(--fs-h2);margin-top:8px">ผลการสแกนก่อนหน้า</h2></div>
-    <a class="link" href="#/history">ดูประวัติทั้งหมด ${icon("arrow")}</a></div>
-    <div class="hist">${jobs.slice(0, 3).map(histRow).join("")}</div>
-  </div></section>` : ""}
+  renderTargetPanel(); renderPortsPanel(); renderAdvPanel(); updateScan(true);
 
-  <section class="section"><div class="wrap">
-    <div class="section-head center"><p class="eyebrow">คำถามที่พบบ่อย</p><h2>มีข้อสงสัย?</h2></div>
-    <div class="faq">
-      <details><summary>PHP2Shell คืออะไร</summary><p>ช่องโหว่ร้ายแรงใน PHP (CVE-2026-109618 และ CVE-2026-109619 ระดับ CVSS 9.2) ที่อาจทำให้ผู้ไม่หวังดีสั่งงานเครื่องเซิร์ฟเวอร์ได้ แก้ได้ด้วยการอัปเดต PHP เป็น 8.5.12, 8.4.27, 8.3.36 หรือ 8.2.35 ขึ้นไปตามสาขาที่ใช้</p></details>
-      <details><summary>การสแกนจะทำให้เว็บหรือเครือข่ายล่มไหม</summary><p>ไม่ thscan เปิดการเชื่อมต่อสั้น ๆ และขอหน้าเว็บตามปกติเหมือนผู้ใช้ทั่วไปเปิดเว็บ มีการจำกัดจำนวนการเชื่อมต่อพร้อมกัน และไม่ส่งโค้ดโจมตีใด ๆ</p></details>
-      <details><summary>ทำไมบางเป้าหมายสแกนไม่ได้</summary><p>ผู้ติดตั้ง thscan กำหนดช่วง IP ที่อนุญาตไว้ (THSCAN_ALLOWED_CIDRS) เพื่อให้ใช้ตรวจได้เฉพาะเครือข่ายของหน่วยงานเอง ถ้าต้องการเพิ่มช่วง ให้ผู้ดูแลระบบแก้ค่านี้แล้วเริ่มโปรแกรมใหม่</p></details>
-      <details><summary>ตรวจเว็บไซต์จากลิงก์ได้อย่างไร</summary><p>เลือก “เว็บไซต์ (ลิงก์)” แล้ววางลิงก์ เช่น https://www.agency.go.th ระบบจะค้นหา IP จาก DNS ครั้งเดียว ตรวจว่าเป็นโดเมนหน่วยงานและ IP อยู่ในขอบเขตที่อนุญาต จากนั้นสแกน IP นั้นโดยส่งชื่อเว็บไปด้วย เพื่อให้ได้ผลของเว็บนั้นจริง ๆ แม้เซิร์ฟเวอร์เดียวจะมีหลายเว็บ</p></details>
-      <details><summary>การตรวจพอร์ตบอกอะไร และอันตรายไหม</summary><p>เป็นการลองเชื่อมต่อแบบปกติว่าพอร์ตไหนเปิดรับอยู่ (เหมือนการกดโทรแล้ววางสาย) ไม่ส่งข้อมูลโจมตี ผลที่ได้ช่วยให้เห็นบริการที่ไม่ควรเปิด เช่น Telnet หรือฐานข้อมูลที่เครื่องทั่วไปเข้าถึงได้ พอร์ตที่เปิดอยู่ไม่ได้แปลว่ามีช่องโหว่ จึงไม่นำไปลดคะแนน</p></details>
-      <details><summary>ทำไมบางเครื่องไม่มี MAC address</summary><p>MAC อ่านได้เฉพาะเครื่องที่อยู่ในวง LAN เดียวกับเครื่องที่รัน thscan ถ้าเครื่องอยู่คนละวง (ผ่านเราเตอร์) ข้อมูลนี้จะว่าง ซึ่งเป็นเรื่องปกติ</p></details>
-      <details><summary>“ตัวอย่างผลการสแกน” ต่างจากการสแกนจริงอย่างไร</summary><p>ตัวอย่างใช้ข้อมูลจำลองที่เตรียมไว้ ไม่ได้ส่งสัญญาณไปที่เครือข่ายใด ทุกหน้าที่มาจากตัวอย่างจะมีป้าย “ตัวอย่าง · ข้อมูลจำลอง” กำกับไว้เสมอ</p></details>
-      <details><summary>คะแนนความปลอดภัยเป็นคะแนนทางการหรือไม่</summary><p>ไม่ใช่ คะแนนคำนวณโดย thscan จากจำนวนเครื่องที่มีความเสี่ยง ใช้ติดตามความคืบหน้าภายในหน่วยงาน ไม่ใช่การรับรองจาก ThaiCERT หรือหน่วยงานใด</p></details>
-    </div>
-  </div></section>
-
-  <section class="section" style="padding-top:0"><div class="wrap">
-    <div class="cta-band"><div><h2>พร้อมตรวจเครือข่ายของคุณแล้ว?</h2><p>ใช้เวลาไม่กี่นาที และไม่กระทบการทำงานของระบบ</p></div>
-    <button class="btn btn-lg" id="cta-go">เริ่มสแกน</button></div>
-  </div></section>`);
-
-  const card = $("#scan-card");
-  const refresh = (rebuildCustom) => {
-    if (!$("#plan")) return;
-    if (rebuildCustom) $("#custom").innerHTML = customPanel();
-    $("#plan").innerHTML = planHTML();
-    $("#go").disabled = !planOk();
-    $("#go-err").hidden = true;
-  };
-  card.addEventListener("click", (e) => {
-    const tg = e.target.closest("[data-target]");
-    if (tg) {
-      pick.target = tg.dataset.target;
-      $$("[data-target]", card).forEach((x) => x.setAttribute("aria-pressed", String(x === tg)));
-      $("#t-net").hidden = pick.target !== "net"; $("#t-site").hidden = pick.target !== "site";
-      if (pick.target === "site") { $("#sites").focus(); scheduleResolve(() => refresh(false)); } else refresh(false);
-      return;
-    }
-    const a = e.target.closest("[data-auto]"), c = e.target.closest("[data-custom]");
-    const k = e.target.closest("[data-kind]"), f = e.target.closest("[data-fill]");
-    if (a || c) {
-      pick.mode = a ? "auto" : "custom"; if (a) pick.auto = a.dataset.auto;
-      $$("[role=radio]", card).forEach((x) => x.setAttribute("aria-checked", String(x === (a || c))));
-      $("#custom").hidden = pick.mode !== "custom";
-      refresh(false);
-      if (c) { const first = $("#custom input, #custom select", card); first && first.focus(); }
-    } else if (k) {
-      pick.kind = k.dataset.kind; refresh(true);
-      const first = $("#custom input", card); first && first.focus();
-    } else if (f) {
-      const b = cidrBounds(f.dataset.fill);
-      if (b) { pick.kind = "subnet"; pick.oct.subnet = intToIp(b.net).split("."); pick.prefix = Math.max(b.prefix, 24); refresh(true); }
-    }
+  $("#ringin").addEventListener("input", (e) => { S.prefix = +e.target.value; updateScan(); });
+  $("#bigger").addEventListener("click", () => { S.prefix = Math.max(16, S.prefix - 1); updateScan(); });
+  $("#smaller").addEventListener("click", () => { S.prefix = Math.min(30, S.prefix + 1); updateScan(); });
+  $("#go").addEventListener("click", async (e) => {
+    const plan = scanPlan(), btn = e.currentTarget;
+    btn.disabled = true;
+    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay }); }
+    catch (err) { toast(err.message); btn.disabled = false; }
   });
-  card.addEventListener("input", (e) => {
-    const t = e.target;
-    if (t.dataset.oct) {
+
+  // panels are re-rendered on change, so their events are delegated here once
+  const pt = $("#p-target");
+  pt.addEventListener("click", (e) => {
+    const m = e.target.closest("[data-mode]"), d = e.target.closest("[data-detected]");
+    if (m && m.dataset.mode !== S.mode) {
+      S.mode = m.dataset.mode; S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true);
+      if (S.mode === "site") resolveSites();
+      const first = $("input", pt); first && first.focus({ preventScroll: true });
+    }
+    if (d) { const b = cidrBounds(d.dataset.detected); if (b) { S.mode = "subnet"; S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(16, b.prefix)); S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true); shut($("#d-target")); } }
+  });
+  pt.addEventListener("input", (e) => {
+    const t = e.target, key = t.dataset.oct;
+    if (key) {
       const v = t.value.replace(/\D/g, "").slice(0, 3);
-      t.value = v; pick.oct[t.dataset.oct][+t.dataset.i] = v;
-      t.setAttribute("aria-invalid", String(v !== "" && +v > 255));
-      if (v.length === 3 && t.dataset.i < 3) focusOct(t, 1);
-      if (t.dataset.oct === "range") { const p = $("#range-prefix"); if (p) p.textContent = pick.oct.range.slice(0, 3).map((x) => x || "_").join(".") + "."; }
-    } else if (t.id === "range-end") { t.value = t.value.replace(/\D/g, "").slice(0, 3); pick.rangeEnd = t.value; }
-    else if (t.id === "free") pick.text = t.value;
-    else if (t.id === "prefix") pick.prefix = +t.value;
-    else if (t.id === "pp-custom") pick.customPorts = t.value;
-    else if (t.id === "sites") { pick.sitesText = t.value; scheduleResolve(() => refresh(false)); return; }
+      t.value = v; S[key][+t.dataset.i] = v; t.setAttribute("aria-invalid", String(v !== "" && +v > 255));
+      if (v.length === 3 && +t.dataset.i < 3) focusOct(t, 1);
+    } else if (t.id === "rs" || t.id === "re") { t.value = t.value.replace(/\D/g, "").slice(0, 3); S[t.id] = t.value; t.setAttribute("aria-invalid", String(t.value !== "" && +t.value > 255)); }
+    else if (t.id === "site-in") { S.site = t.value; resolveSites(); }
+    else if (t.id === "text-in") S.text = t.value;
     else return;
-    refresh(false);
+    updateScan();
   });
-  card.addEventListener("change", (e) => {
-    if (e.target.id === "prefix") { pick.prefix = +e.target.value; refresh(false); }
-    if (e.target.id === "pp") {
-      pick.profile = e.target.value;
-      $("[data-custom-ports]", card).hidden = pick.profile !== "custom";
-      if (pick.profile === "custom") $("#pp-custom").focus();
-      refresh(false);
-    }
-  });
-  card.addEventListener("keydown", (e) => {
+  pt.addEventListener("keydown", (e) => {
     const t = e.target;
-    if (!t.dataset.oct) { if (e.key === "Enter" && t.tagName === "INPUT" && !$("#go").disabled) $("#go").click(); return; }
-    if ((e.key === "." || e.key === " ") && t.value) { e.preventDefault(); focusOct(t, 1); }
+    if (!t.dataset.oct) return;
+    if (e.key === "." || e.key === " ") {
+      // a field reached by auto-advance is fully selected: the typed dot just confirms it
+      e.preventDefault();
+      if (t.value && !(t.selectionStart === 0 && t.selectionEnd === t.value.length)) focusOct(t, 1);
+    }
     else if (e.key === "Backspace" && !t.value) { e.preventDefault(); focusOct(t, -1); }
-    else if (e.key === "ArrowLeft" && t.selectionStart === 0) focusOct(t, -1);
-    else if (e.key === "ArrowRight" && t.selectionStart === t.value.length) focusOct(t, 1);
-    else if (e.key === "Enter" && !$("#go").disabled) $("#go").click();
   });
-  card.addEventListener("paste", (e) => {
+  pt.addEventListener("paste", (e) => {
     const t = e.target;
     if (!t.dataset.oct) return;
     const text = (e.clipboardData.getData("text") || "").trim();
@@ -643,379 +510,518 @@ async function viewHome(_, alive) {
     if (!m) return;
     e.preventDefault();
     const parts = m[1].split(".");
-    if (m[2]) { pick.kind = "subnet"; pick.oct.subnet = parts; pick.prefix = Math.min(30, Math.max(16, +m[2])); }
-    else if (m[3]) { pick.kind = "range"; pick.oct.range = parts; pick.rangeEnd = m[3].split(".").pop(); }
-    else pick.oct[t.dataset.oct] = parts;
-    refresh(true);
+    if (m[2]) { S.mode = "subnet"; S.oct = parts; S.prefix = Math.min(30, Math.max(16, +m[2])); }
+    else if (m[3]) { S.mode = "range"; S.oct = parts; S.rs = parts[3]; S.re = m[3].split(".").pop(); }
+    else S[t.dataset.oct] = parts;
+    renderTargetPanel(); updateScan(true);
   });
-  $("#go").addEventListener("click", async (e) => {
-    const btn = e.currentTarget; btn.disabled = true;
-    const ports = { port_profile: pick.profile, custom_ports: pick.profile === "custom" ? pick.customPorts : "" };
-    try { await startScan(pick.target === "site" ? { sites: siteList(), ...ports } : { targets: pickTargets(), ...ports }); }
-    catch (err) { const el = $("#go-err"); el.textContent = err.message; el.hidden = false; btn.disabled = false; }
+  $("#p-ports").addEventListener("click", (e) => {
+    const p = e.target.closest("[data-profile]");
+    if (!p || p.dataset.profile === S.profile) return;
+    S.profile = p.dataset.profile; renderPortsPanel(); updateScan();
+    if (S.profile === "custom") $("#custom-in").focus(); else shut($("#d-ports"));
   });
-  $("#demo-link").addEventListener("click", openDemoPicker);
-  $("#cta-go").addEventListener("click", () => card.scrollIntoView({ behavior: "smooth", block: "center" }));
+  $("#p-ports").addEventListener("input", (e) => { if (e.target.id === "custom-in") { S.custom = e.target.value; updateScan(); } });
+  $("#p-adv").addEventListener("input", (e) => {
+    if (e.target.id === "speed") S.speed = +e.target.value;
+    if (e.target.id === "delay") S.delay = +e.target.value;
+    renderAdvValues(); updateScan();
+  });
 }
 function focusOct(input, dir) {
   const all = $$(`[data-oct="${input.dataset.oct}"]`);
-  const next = all[+input.dataset.i + dir] || (dir > 0 && input.dataset.oct === "range" ? $("#range-end") : null);
+  const next = all[+input.dataset.i + dir];
   if (next) { next.focus(); next.select(); }
 }
 
-/* ── view: scanning ─────────────────────────────────────────────────── */
+function stageSvg() {
+  return `<svg class="vis" viewBox="0 0 400 440" role="img" id="vis" aria-label="แผนภาพเป้าหมาย">
+    <defs>
+      <radialGradient id="mglow"><stop offset="0%" stop-color="#8B7CFF" stop-opacity=".35"/><stop offset="55%" stop-color="#4F7BFF" stop-opacity=".12"/><stop offset="100%" stop-color="#4F7BFF" stop-opacity="0"/></radialGradient>
+      <linearGradient id="mgrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2F5BEA"/><stop offset="1" stop-color="#6D4AFF"/></linearGradient>
+    </defs>
+    <ellipse class="halo" cx="200" cy="168" rx="160" ry="128" fill="url(#mglow)"/>
+    <ellipse cx="200" cy="292" rx="122" ry="15" fill="#2F3B8C" opacity=".1" style="filter:blur(6px)"/>
+    <g id="g-plate" style="transition:opacity .45s ease">
+      <path id="p-lower" fill="none" stroke="#8A93D9" stroke-width="1.2"/>
+      <path id="p-top" fill="rgba(243,245,255,.92)" stroke="url(#mgrad)" stroke-width="2" stroke-linejoin="round"/>
+      <path id="p-light" fill="#C5CFEE"/><path id="p-dark" fill="url(#mgrad)"/>
+    </g>
+    <g id="g-globe" fill="none" style="transition:opacity .45s ease;opacity:0">
+      <circle cx="200" cy="172" r="92" fill="rgba(243,245,255,.92)" stroke="url(#mgrad)" stroke-width="2.6"/>
+      <ellipse cx="200" cy="172" rx="40" ry="92" stroke="#6D7BEA" stroke-width="1.4"/>
+      <ellipse cx="200" cy="172" rx="92" ry="34" stroke="#6D7BEA" stroke-width="1.4"/>
+      <ellipse cx="200" cy="172" rx="66" ry="92" stroke="#B4BDF2" stroke-width="1"/>
+    </g>
+    <path d="M39 300 C42 372 111 407 200 407 C289 407 358 372 361 300" fill="none" stroke="#E1E6F5" stroke-width="6" stroke-linecap="round"/>
+    <path id="p-ring" d="M39 300 C42 372 111 407 200 407 C289 407 358 372 361 300" pathLength="100" fill="none" stroke="url(#mgrad)" stroke-width="6" stroke-linecap="round" style="transition:stroke-dasharray .65s cubic-bezier(.34,1.3,.64,1),opacity .4s"/>
+    <g id="g-mark" class="mark"><circle r="13" fill="#fff" stroke="url(#mgrad)" stroke-width="3"/><circle r="4" fill="#4A4FF0"/></g>
+  </svg>`;
+}
+
+const SEP = '<span aria-hidden="true" style="font-weight:700;color:#8A93B3">.</span>';
+function renderTargetPanel() {
+  const octInputs = (key, label) => `<div><span class="lbl" id="lbl-${key}">${label}</span>
+    <div role="group" aria-labelledby="lbl-${key}" style="display:flex;align-items:center;gap:5px">
+    ${S[key].map((v, i) => `${i ? SEP : ""}<input class="inp oct" inputmode="numeric" autocomplete="off" data-oct="${key}" data-i="${i}" value="${esc(v)}" aria-label="${label} ส่วนที่ ${i + 1}">`).join("")}
+    </div></div>`;
+  let input;
+  if (S.mode === "subnet") input = octInputs("oct", "ที่อยู่เครือข่าย");
+  else if (S.mode === "single") input = octInputs("single", "IP ของเครื่อง");
+  else if (S.mode === "range") input = `<div><span class="lbl">ช่วง IP (ในวงเดียวกัน)</span><div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+    ${S.oct.slice(0, 3).map((v, i) => `<input class="inp oct" inputmode="numeric" autocomplete="off" data-oct="oct" data-i="${i}" value="${esc(v)}" aria-label="ส่วนที่ ${i + 1}">`).join(SEP)}
+    ${SEP}<input class="inp oct" id="rs" inputmode="numeric" autocomplete="off" value="${esc(S.rs)}" aria-label="เริ่มที่"><span style="font-size:13px;color:var(--muted)">ถึง</span><input class="inp oct" id="re" inputmode="numeric" autocomplete="off" value="${esc(S.re)}" aria-label="ถึง"></div></div>`;
+  else if (S.mode === "site") input = `<label style="display:block"><span class="lbl">ลิงก์หรือโดเมนของหน่วยงาน ${tip("วางลิงก์ เช่น https://www.agency.go.th ระบบค้นหา IP จาก DNS ให้ และส่งชื่อเว็บไปด้วยเพื่อให้ได้ผลของเว็บนั้นจริง · ใส่ได้หลายเว็บคั่นด้วยเว้นวรรค")}</span>
+    <input class="inp" id="site-in" value="${esc(S.site)}" placeholder="https://www.agency.go.th" autocomplete="off" spellcheck="false"></label><div id="site-preview" aria-live="polite" style="margin-top:8px"></div>`;
+  else input = `<label style="display:block"><span class="lbl">ซับเน็ต ช่วง หรือ IP คั่นด้วยจุลภาค</span><input class="inp" id="text-in" value="${esc(S.text)}" placeholder="10.0.5.0/24, 10.0.6.10-50, 10.0.7.3" autocomplete="off" spellcheck="false"></label>`;
+  const det = S.detected.length && S.mode !== "site" ? `<div style="margin-top:12px"><span class="lbl">ระบบหาให้แล้ว ${tip("วงเครือข่ายที่เครื่องนี้เชื่อมต่ออยู่ กดเพื่อใช้ได้ทันที")}</span>
+    <div style="display:flex;flex-direction:column;gap:6px">${S.detected.map((d) => `<button type="button" class="opt" data-detected="${esc(d.cidr)}" ${d.ok ? "" : "disabled"} style="min-height:46px"><span style="flex:1;min-width:0"><span class="ot">${esc(d.cidr)}</span><span class="od">${esc(d.name)}</span></span><span class="badge ${d.ok ? "b-blue" : "b-grey"}">${d.ok ? `ใช้วงนี้ · ${num(d.hosts)}` : "นอกขอบเขต"}</span></button>`).join("")}</div></div>` : "";
+  $("#p-target").innerHTML = `<div class="stag">
+    <div class="ptitle">จะตรวจอะไร ${tip("เลือกว่าจะตรวจทั้งวง บางช่วง เครื่องเดียว หรือเว็บไซต์จากลิงก์ — ไม่แน่ใจ เลือก “ทั้งวง”")}</div>
+    <div role="group" aria-label="ประเภทเป้าหมาย" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
+      ${MODES.map(([k, t, d, i]) => `<button type="button" class="opt" data-mode="${k}" aria-pressed="${S.mode === k}"><span class="oi">${ic(i)}</span><span style="min-width:0"><span class="ot">${t}</span><span class="od">${d}</span></span></button>`).join("")}
+    </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">${input}</div>
+    ${det}</div>`;
+  renderSitePreview();
+}
+function renderPortsPanel() {
+  $("#p-ports").innerHTML = `<div class="stag">
+    <div class="ptitle">ชุดพอร์ต ${tip("พอร์ตคือ “ช่องทาง” ที่บริการเปิดรับ ระบบลองเชื่อมต่อแบบปกติ (เหมือนโทรแล้ววาง) เพื่อดูว่าเปิดอะไรไว้ พอร์ตเว็บถูกตรวจเสมอ")}</div>
+    ${profileOpts("data-profile", S.profile)}
+    ${S.profile === "custom" ? `<label style="display:block;margin-top:10px"><span class="lbl">พอร์ตที่ต้องการ</span><input class="inp" id="custom-in" value="${esc(S.custom)}" autocomplete="off" spellcheck="false"></label>` : ""}
+  </div>`;
+}
+function renderAdvPanel() {
+  $("#p-adv").innerHTML = `<div class="stag">
+    <label style="display:block"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">ความเร็ว ${tip("จำนวนการเชื่อมต่อพร้อมกัน ลดลงได้ถ้าเครือข่ายช้า หรือไม่อยากกระทบการใช้งาน")}</span><b style="color:var(--ink)" id="speed-v"></b></span>
+      <input class="rng" id="speed" type="range" min="5" max="${cfg.max_concurrency}" step="5" value="${S.speed}" aria-label="ความเร็ว"></label>
+    <label style="display:block;margin-top:10px"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">พักระหว่างเครื่อง ${tip("เว้นช่วงหลังตรวจแต่ละเครื่อง นุ่มนวลต่อเครือข่าย แต่ใช้เวลานานขึ้น")}</span><b style="color:var(--ink)" id="delay-v"></b></span>
+      <input class="rng" id="delay" type="range" min="0" max="500" step="50" value="${S.delay}" aria-label="พักระหว่างเครื่อง"></label>
+  </div>`;
+  renderAdvValues();
+}
+function renderAdvValues() {
+  $("#speed-v").textContent = `${S.speed} งาน`; $("#delay-v").textContent = `${S.delay} ms`;
+  $("#speed").style.setProperty("--p", `${((S.speed - 5) / Math.max(1, cfg.max_concurrency - 5)) * 100}%`);
+  $("#delay").style.setProperty("--p", `${(S.delay / 500) * 100}%`);
+}
+let resolveTimer;
+function resolveSites() {
+  clearTimeout(resolveTimer);
+  const key = siteList().join("\n");
+  if (!key) { S.report = null; S.reportFor = ""; renderSitePreview(); return; }
+  if (key === S.reportFor) return;
+  renderSitePreview();
+  resolveTimer = setTimeout(async () => {
+    let report;
+    try { report = (await api(`/api/resolve?q=${encodeURIComponent(key)}`)).sites; }
+    catch (e) { report = [{ input: key, host: key, ips: [], problems: [e.message], refused: false }]; }
+    if (siteList().join("\n") !== key) return;
+    S.report = report; S.reportFor = key;
+    if ($("#vis")) { renderSitePreview(); updateScan(); }
+  }, 450);
+}
+function renderSitePreview() {
+  const box = $("#site-preview");
+  if (!box) return;
+  const key = siteList().join("\n");
+  if (!key) { box.innerHTML = `<p class="od">ตรวจได้เฉพาะโดเมนหน่วยงาน (${esc((cfg.gov_suffixes || []).join(", "))})</p>`; return; }
+  if (S.reportFor !== key || !S.report) { box.innerHTML = `<p class="od">กำลังค้นหา IP จาก DNS…</p>`; return; }
+  box.innerHTML = S.report.map((r) => `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;font-size:13px">
+    <span class="badge ${r.problems.length ? "b-bad" : "b-ok"}" style="padding:4px 7px">${ic(r.problems.length ? "x" : "check", 13, 3)}</span>
+    <span style="min-width:0;overflow-wrap:anywhere">${r.problems.length ? esc(r.problems.join(" · ")) : `<b>${esc(r.host)}</b> → <span class="mono">${esc(r.ips.join(", "))}</span>`}</span></div>`).join("");
+}
+
+function updateScan(modeChanged) {
+  if (!$("#vis")) return;
+  const plan = scanPlan();
+  // the 16×16 plate stands for one /24: highlighted dots are the addresses in scope
+  const Pt = (i, j, lift) => [200 + (i - j) * 8.2, 104 + (i + j) * 4.1 + lift];
+  const plate = (lift) => "M" + [Pt(-0.9, -0.9, lift), Pt(15.9, -0.9, lift), Pt(15.9, 15.9, lift), Pt(-0.9, 15.9, lift)].map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + "Z";
+  const dot = (x, y, r) => `M${(x - r).toFixed(1)} ${y.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
+  const p = S.prefix, size = 2 ** (32 - p);
+  let hl;
+  if (S.mode === "subnet") { const d = +S.oct[3] || 0, base = p >= 24 ? d - (d % size) : 0; hl = (n) => p < 24 || (n >= base && n < base + size); }
+  else if (S.mode === "range") { const a = Math.min(255, +S.rs || 0), b = Math.min(255, +S.re || 0); hl = (n) => n >= a && n <= b; }
+  else if (S.mode === "single") hl = (n) => n === +S.single[3];
+  else { const k = Math.max(1, Math.round(Math.min(1, plan.count / 256) * 256)); hl = (n) => n < k; }
+  let dark = "", light = "";
+  for (let n = 0; n < 256; n += 1) { const [x, y] = Pt(Math.floor(n / 16), n % 16, 0); if (hl(n)) dark += dot(x, y, S.mode === "single" ? 3.4 : 1.8); else light += dot(x, y, 1.1); }
+  let lower = "";
+  if (S.mode === "subnet" && p < 24) for (let k = 1; k < Math.min(4, 2 ** (24 - p)); k += 1) lower += plate(k * 13);
+  $("#p-top").setAttribute("d", plate(0)); $("#p-lower").setAttribute("d", lower || "M0 0");
+  $("#p-dark").setAttribute("d", dark || "M0 0"); $("#p-light").setAttribute("d", light || "M0 0");
+  const site = S.mode === "site", subnet = S.mode === "subnet";
+  $("#g-plate").style.opacity = site ? 0 : 1; $("#g-globe").style.opacity = site ? 1 : 0;
+  const th = Math.PI * (1 - (p - 16) / 14), mx = 200 + 160 * Math.cos(th), my = 362 + 45 * Math.sin(th);
+  $("#g-mark").style.transform = `translate(${mx.toFixed(1)}px,${my.toFixed(1)}px)`; $("#g-mark").style.opacity = subnet ? 1 : 0;
+  const ring = $("#p-ring"); ring.style.strokeDasharray = `${subnet ? Math.round(((p - 16) / 14) * 100) : 100} 100`; ring.style.opacity = subnet ? 1 : 0.25;
+  $("#vis").setAttribute("aria-label", `${plan.label} ${plan.big} ${num(plan.count)} ที่อยู่`);
+  const ri = $("#ringin"); ri.hidden = !subnet; ri.value = p;
+  $("#bigger").hidden = !subnet; $("#smaller").hidden = !subnet; $("#v-hint").hidden = !subnet;
+  $("#bigger").disabled = p <= 16; $("#smaller").disabled = p >= 30;
+  if (modeChanged) $("#stage-wrap").className = `swap${S.swap}`;
+  $("#v-label").textContent = plan.label; $("#v-big").textContent = plan.big;
+  $("#v-sub").textContent = plan.sub ? (site ? plan.sub : `ที่อยู่ · ${plan.sub}`) : "ที่อยู่";
+  tween($("#v-count"), plan.count, 600);
+  // dock summaries
+  const pc = portCount(S.profile, S.custom);
+  $("#sum-target").textContent = plan.summary;
+  $("#sum-ports").textContent = pc.error ? "รูปแบบพอร์ตไม่ถูกต้อง" : `${(PROFILE_TEXT[S.profile] || [S.profile])[0]} · ${num(pc.n)} พอร์ต`;
+  $("#sum-adv").textContent = `${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`} · ${S.delay ? `พัก ${S.delay} ms` : "ไม่พัก"}`;
+  // readiness: the button is enabled only when the server would accept the request
+  const budgetOk = !pc.error && plan.count * pc.n <= cfg.max_port_probes;
+  const ok = plan.valid && plan.scoped && !plan.pending && !pc.error && budgetOk;
+  const secs = Math.ceil(plan.count / Math.max(1, S.speed)) * 1.5 + Math.ceil((plan.count * 0.25 * Math.max(pc.n || 4, 4)) / (cfg.max_sockets || 256)) * 1.5 + 8 + (S.delay * plan.count) / 1000 / Math.max(1, S.speed);
+  const time = secs < 60 ? "ไม่ถึง 1 นาที" : `ประมาณ ${num(Math.ceil(secs / 60))} นาที`;
+  const reason = plan.reason || (pc.error ? pc.error : !budgetOk ? `งานใหญ่เกินไป (${num(plan.count)} ที่อยู่ × ${num(pc.n)} พอร์ต) — ลดขนาดวงหรือจำนวนพอร์ต` : "");
+  $("#ready-ic").innerHTML = ic(ok ? "check" : plan.pending ? "clock" : "x", 17, 3);
+  $("#ready-ic").style.background = ok ? "linear-gradient(135deg,#12A46B,#0B7045)" : plan.pending ? "var(--grad)" : "linear-gradient(135deg,#D9363E,#B4232B)";
+  $("#ready-k").textContent = ok ? "พร้อมสแกน" : plan.pending ? "รอสักครู่" : "ยังเริ่มไม่ได้";
+  $("#ready-v").textContent = ok ? `${num(plan.count)} ที่อยู่ · ${time}` : reason;
+  const line = (good, text) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge ${good ? "b-ok" : "b-bad"}" style="padding:4px 7px">${ic(good ? "check" : "x", 13, 3)}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(text)}</span></div>`;
+  $("#p-ready").innerHTML = `<div class="stag">
+    ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
+    ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? "เป็นโดเมนหน่วยงาน" : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : plan.reason || "อยู่นอกขอบเขต"))}
+    ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · อ่านอย่างเดียว ไม่ทำลายระบบ</div></div>`;
+  $("#go").disabled = !ok;
+}
+
+/* ═══ view: scanning ═══════════════════════════════════════════════════ */
 async function viewScanning([id], alive) {
   let s = await api(`/api/scans/${id}/summary`);
   if (!alive()) return;
   if (!["queued", "running"].includes(s.state)) { location.replace(`#/results/${id}`); return; }
-  render(`<section class="scanning"><div class="scanning-box">
-    ${s.demo_scenario ? '<span class="badge demo">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}
-    <h1 class="eyebrow" style="font-size:var(--fs-body);margin-top:16px">กำลังสแกน <span class="mono">${esc(s.target_label)}</span></h1>
-    <div class="big" id="pct" aria-hidden="true">0%</div>
-    <div class="bar" role="progressbar" aria-label="ความคืบหน้า" aria-valuemin="0" aria-valuemax="100" id="bar-wrap"><i id="bar"></i></div>
-    <p class="phase" id="phase" aria-live="polite">กำลังเตรียมการ…</p>
-    <div class="counters">
-      <div class="counter"><b id="c-probed">0</b><span>ตรวจแล้ว</span></div>
-      <div class="counter"><b id="c-online">0</b><span>ออนไลน์</span></div>
-      <div class="counter"><b id="c-risks">0</b><span>ควรแก้ไข</span></div>
+  setTopSide(`<a class="ghost" href="#/history" title="สแกนต่อในเบื้องหลัง">ย่อไว้เบื้องหลัง</a><button type="button" class="ghost stop" id="cancel">หยุดสแกน</button>`);
+  const STEPS = [
+    ["ตรวจกลางทาง", "ทดสอบกับที่อยู่ที่ไม่มีจริงก่อน ถ้ามี proxy หรือ firewall ตอบแทนทุกที่อยู่ ระบบจะตัดผลปลอมเหล่านั้นออก"],
+    ["หาเครื่องออนไลน์", "ลองเชื่อมต่อทุกที่อยู่ ตามชุดพอร์ตที่เลือก เพื่อดูว่าเครื่องไหนเปิดอยู่"],
+    ["ตรวจพอร์ต เว็บ และ PHP", "ดูว่าเครื่องที่ออนไลน์เปิดบริการอะไร แล้วอ่านเวอร์ชัน PHP จากเว็บเพื่อเทียบกับรุ่นที่แพตช์"],
+  ];
+  render(`<div class="app thin" style="text-align:center">
+    <div class="in1">
+      <span class="badge b-blue" style="font-size:13px;padding:6px 12px"><span class="live"></span>${s.demo_scenario ? "ตัวอย่าง · ข้อมูลจำลอง" : "กำลังทำงาน"}</span>
+      <h1 class="h1" style="margin-top:10px;font-size:clamp(24px,3vw,34px);overflow-wrap:anywhere">กำลังสแกน <span class="num">${esc(s.target_label || "")}</span></h1>
     </div>
-    <p style="margin-top:48px"><button class="btn btn-secondary" id="cancel">ยกเลิกการสแกน</button></p>
-  </div></section>`);
-  let stop = false;
-  cleanup = () => { stop = true; };
+    <section class="card in2" aria-label="ความคืบหน้า" style="margin-top:18px;padding:16px 24px 24px">
+      <svg viewBox="0 0 400 440" role="img" aria-label="ความคืบหน้าการสแกน" style="display:block;width:100%;max-width:400px;height:auto;margin:0 auto;overflow:visible">
+        <defs><radialGradient id="sglow"><stop offset="0%" stop-color="#8B7CFF" stop-opacity=".35"/><stop offset="55%" stop-color="#4F7BFF" stop-opacity=".12"/><stop offset="100%" stop-color="#4F7BFF" stop-opacity="0"/></radialGradient>
+        <linearGradient id="sgrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2F5BEA"/><stop offset="1" stop-color="#6D4AFF"/></linearGradient></defs>
+        <ellipse class="halo" cx="200" cy="168" rx="160" ry="128" fill="url(#sglow)"/>
+        <path id="sc-plate" fill="rgba(243,245,255,.92)" stroke="url(#sgrad)" stroke-width="2" stroke-linejoin="round"/>
+        <path id="sc-todo" fill="#D5DDF3"/><path id="sc-done" fill="url(#sgrad)"/>
+        <circle id="sc-head" r="7" fill="none" stroke="#6D4AFF" stroke-width="1.6"/>
+        <path d="M39 300 C42 372 111 407 200 407 C289 407 358 372 361 300" fill="none" stroke="#E1E6F5" stroke-width="8" stroke-linecap="round"/>
+        <path id="sc-ring" d="M39 300 C42 372 111 407 200 407 C289 407 358 372 361 300" pathLength="100" fill="none" stroke="url(#sgrad)" stroke-width="8" stroke-linecap="round" style="stroke-dasharray:0 100;transition:stroke-dasharray .5s ease"/>
+      </svg>
+      <div class="gtext num" id="sc-pct" style="margin-top:-20px;font-size:46px;font-weight:700;line-height:1.1">0%</div>
+      <div class="sec" style="margin-top:6px">
+      <div id="sc-phase" aria-live="polite" style="font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px"></div>
+      ${dock("d-steps", `<button type="button" class="seg" aria-label="ดูขั้นตอนการสแกน">${STEPS.map((_, i) => `<i><b id="seg${i}"></b></i>`).join("")}</button>`, `<ol class="stag" id="steps-list" style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;text-align:left"></ol>`, { w: 460, align: "mid" })}</div>
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px">
+        <span class="chip">ตรวจแล้ว <b id="c-probed">0</b>/<span id="c-total">0</span></span>
+        <span class="chip">ออนไลน์ <b id="c-online" style="color:var(--blue-ink)">0</b></span>
+        <span class="chip">ควรแก้ไข <b id="c-risks" style="color:var(--crit)">0</b></span>
+      </div>
+      <div id="sc-note"></div>
+    </section>
+    <p class="in3 muted" style="margin-top:14px;font-size:13px">ปิดหน้านี้ได้ ระบบสแกนต่อเบื้องหลังและเก็บผลไว้ที่หน้าประวัติ</p>
+  </div>`);
+  const Pt = (i, j) => [200 + (i - j) * 8.2, 104 + (i + j) * 4.1];
+  $("#sc-plate").setAttribute("d", "M" + [Pt(-0.9, -0.9), Pt(15.9, -0.9), Pt(15.9, 15.9), Pt(-0.9, 15.9)].map((q) => q[0].toFixed(1) + " " + q[1].toFixed(1)).join("L") + "Z");
+  const dot = (x, y, r) => `M${(x - r).toFixed(1)} ${y.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
   $("#cancel").addEventListener("click", async (e) => {
-    e.currentTarget.disabled = true;
-    try { await api(`/api/scans/${id}/cancel`, { method: "POST" }); $("#phase").textContent = "กำลังหยุด…"; }
-    catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+    const b = e.currentTarget; b.disabled = true;
+    try { await api(`/api/scans/${id}/cancel`, { method: "POST" }); stopping = true; $("#sc-phase").textContent = "กำลังหยุด…"; lastPhase = "กำลังหยุด…"; }
+    catch (err) { toast(err.message); b.disabled = false; }
   });
+  // the plate shows the probed fraction only; mid-scan the API does not say which addresses answered
+  let lastSteps = "", lastPhase = "", stopping = false;
   const paint = (s) => {
-    const p = s.progress, total = p.total_ips || 1;
-    const phase1 = p.phase !== "inspect";
-    const pct = phase1 ? Math.floor((p.probed / total) * 50)
-      : 50 + Math.floor(((p.inspected || 0) / Math.max(1, p.to_inspect || 1)) * 48);
-    $("#pct").textContent = `${pct}%`; $("#bar").style.width = `${pct}%`; $("#bar-wrap").setAttribute("aria-valuenow", pct);
-    $("#c-probed").textContent = `${num(p.probed)}/${num(p.total_ips)}`;
+    const p = s.progress, total = Math.max(1, p.total_ips), inspect = p.phase === "inspect";
+    const frac1 = Math.min(1, p.probed / total), frac2 = inspect ? (p.to_inspect ? p.inspected / p.to_inspect : 1) : 0;
+    const pct = inspect ? 55 + Math.round(frac2 * 43) : Math.round(frac1 * 55);
+    const stage = !p.phase ? 0 : inspect ? 2 : 1;
+    const fills = [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
+    $$("[id^=seg]").forEach((b, i) => b.style.setProperty("--f", `${Math.round(fills[i] * 100)}%`));
+    const steps = STEPS.map(([t, h], i) => {
+      const st = i < stage ? "done" : i === stage ? "on" : "wait";
+      return `<li style="display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:center;padding:8px 10px;border-radius:12px;background:${st === "on" ? "var(--soft)" : "transparent"}">
+        <span style="width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:${st === "wait" ? "var(--muted)" : "#fff"};background:${st === "wait" ? "#F0F2F8" : "var(--grad)"}">${st === "done" ? "✓" : i + 1}</span>
+        <span style="min-width:0"><span class="ot">${t}</span><span class="od">${h}</span></span><span class="badge ${st === "done" ? "b-ok" : st === "on" ? "b-blue" : "b-grey"}">${st === "done" ? "เสร็จ" : st === "on" ? "กำลังทำ" : "รอคิว"}</span></li>`;
+    }).join("");
+    // rewrite only on change, or the open panel would replay its entrance every poll
+    if (steps !== lastSteps) { $("#steps-list").innerHTML = steps; lastSteps = steps; }
+    const shown = Math.round(frac1 * 256);
+    let todo = "", done = "";
+    for (let n = 0; n < 256; n += 1) { const [x, y] = Pt(Math.floor(n / 16), n % 16); if (n < shown) done += dot(x, y, 1.7); else todo += dot(x, y, 1.1); }
+    $("#sc-todo").setAttribute("d", todo || "M0 0"); $("#sc-done").setAttribute("d", done || "M0 0");
+    const h = Math.min(255, shown), [hx, hy] = Pt(Math.floor(h / 16), h % 16);
+    $("#sc-head").setAttribute("cx", hx.toFixed(1)); $("#sc-head").setAttribute("cy", hy.toFixed(1));
+    $("#sc-head").style.opacity = frac1 >= 1 ? 0 : 1;
+    $("#sc-ring").style.strokeDasharray = `${pct} 100`;
+    $("#sc-pct").textContent = `${pct}%`;
+    const phase = stopping ? "กำลังหยุด…" : `${inspect ? `ขั้นที่ 3 จาก 3 · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก 3 · ${STEPS[stage][0]}`} ${tip("ชี้ที่แถบความคืบหน้าเพื่อดูว่าแต่ละขั้นทำอะไร")}`;
+    if (phase !== lastPhase) { $("#sc-phase").innerHTML = phase; lastPhase = phase; }
+    $("#c-probed").textContent = num(p.probed); $("#c-total").textContent = num(p.total_ips);
     $("#c-online").textContent = num(p.online); $("#c-risks").textContent = num(p.risks);
-    $("#phase").textContent = phase1 ? "ขั้นที่ 1 จาก 2 · ตรวจว่าเครื่องไหนออนไลน์"
-      : `ขั้นที่ 2 จาก 2 · ตรวจพอร์ต เว็บ และเวอร์ชัน PHP (${num(p.inspected || 0)}/${num(p.to_inspect || 0)} เครื่อง)`;
+    if ((s.intercepted_ports || []).length && !$("#sc-note").innerHTML) $("#sc-note").innerHTML = `<p class="notice b-blue" style="margin-top:14px;text-align:left">${ic("shield", 20)}<span>พบอุปกรณ์กลางทางตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(s.intercepted_ports.join(", "))}</span> — ระบบจะตัดเครื่องที่ไม่มีอยู่จริงออกให้</span></p>`;
   };
   paint(s);
+  let stop = false;
+  onCleanup(() => { stop = true; });
   while (!stop) {
     await new Promise((r) => setTimeout(r, 700));
     if (stop || !alive()) return;
     try { s = await api(`/api/scans/${id}/summary`); } catch { continue; }
     if (stop || !alive()) return;
     if (!["queued", "running"].includes(s.state)) {
-      $("#pct").textContent = "100%"; $("#bar").style.width = "100%";
-      setTimeout(() => { if (alive()) location.replace(`#/results/${id}`); }, 350);
+      $("#sc-pct").textContent = "100%"; $("#sc-ring").style.strokeDasharray = "100 100";
+      setTimeout(() => { if (alive()) location.replace(`#/results/${id}`); }, 650);
       return;
     }
     paint(s);
   }
 }
 
-/* ── view: results ──────────────────────────────────────────────────── */
-const ADV0 = () => ({ type: "", php: "", port: "", gov: false, caution: false });
-const R = { job: null, tab: "all", q: "", adv: ADV0(), showAdv: false, sel: null };
-const svcPorts = (d) => (d.services && d.services.length ? d.services.map((x) => x.port) : d.open_ports);
-const cautions = (d) => (d.services || []).filter((x) => x.note);
-
-function phpBranch(v) { const m = /^(\d+\.\d+)/.exec(v || ""); return m ? m[1] : ""; }
-function filtered() {
+/* ═══ view: results ════════════════════════════════════════════════════ */
+const R = { job: null, f: "all", q: "", sel: null, tab: "todo", swap: 0, tswap: 0 };
+const FILTERS = [["all", "ทุกเครื่อง", "#8A93C2"], ["urgent", "ต้องแก้ด่วน", "var(--crit-dot)"], ["fix", "ควรแก้ไข", "var(--warn-dot)"], ["ok", "ผ่าน", "var(--ok-dot)"], ["caution", "มีพอร์ตที่ควรระวัง", "#F2C063"]];
+const services = (d) => (d.services && d.services.length ? d.services : d.open_ports.map((p) => ({ port: p, name: "HTTP", description: "เว็บ", note: null })));
+const hasFilter = (d, k) => k === "all" || (k === "urgent" && d.severity === "critical") || (k === "fix" && (d.severity === "high" || d.severity === "low")) || (k === "ok" && d.severity === "safe") || (k === "caution" && services(d).some((x) => x.note));
+function filteredDevices() {
   const q = R.q.trim().toLowerCase();
-  return R.job.devices.filter((d) => {
-    if (R.tab === "urgent" && d.severity !== "critical") return false;
-    if (R.tab === "fix" && !["high", "low"].includes(d.severity)) return false;
-    if (R.tab === "ok" && d.severity !== "safe") return false;
-    if (R.adv.type && d.device_type !== R.adv.type) return false;
-    if (R.adv.php === "none" && d.php_version) return false;
-    if (R.adv.php && R.adv.php !== "none" && phpBranch(d.php_version) !== R.adv.php) return false;
-    if (R.adv.port && !svcPorts(d).includes(+R.adv.port)) return false;
-    if (R.adv.caution && !cautions(d).length) return false;
-    if (R.adv.gov && !d.matched_suffix) return false;
-    if (!q) return true;
-    const hay = [d.ip, d.hostname, d.mac, d.php_version, d.server, d.cms, devType(d.device_type), d.device_type, d.assessment,
-      ...d.findings.flatMap((f) => [f.title, ...f.cve]),
-      ...(d.services || []).flatMap((x) => [String(x.port), x.name])].join(" ").toLowerCase();
-    return hay.includes(q);
-  });
+  return R.job.devices.filter((d) => hasFilter(d, R.f) && (!q || [d.ip, d.hostname, d.mac, d.php_version, d.server, d.cms, d.device_type, devType(d.device_type),
+    ...services(d).flatMap((x) => [String(x.port), x.name]), ...d.findings.flatMap((f) => [f.title, ...f.cve])].join(" ").toLowerCase().includes(q)));
 }
-const advCount = () => ["type", "php", "port", "gov", "caution"].filter((k) => R.adv[k]).length;
+function todoFor(d) {
+  const recs = [...new Set([...d.findings].sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank).map((f) => f.recommendation).filter(Boolean))];
+  services(d).filter((x) => x.note).forEach((x) => recs.push(`พอร์ต ${x.port} (${x.name}): ${x.note}`));
+  if (recs.length) recs.push(R.job && R.job.demo_scenario ? "แก้เสร็จแล้ว สั่งสแกนซ้ำเพื่อยืนยันผล" : "แก้เสร็จแล้ว กด “ตรวจซ้ำเครื่องนี้” เพื่อยืนยันผล");
+  else recs.push(d.php_version || d.open_ports.length ? "ไม่ต้องทำอะไรเพิ่ม — ตั้งเวลาให้สแกนซ้ำเป็นระยะ" : "เครื่องนี้ไม่มีบริการเว็บ จึงไม่ได้รับผลกระทบจาก PHP2Shell");
+  return recs;
+}
 
 async function viewResults([id], alive) {
   const job = await api(`/api/scans/${id}`);
   if (!alive()) return;
   if (["queued", "running"].includes(job.state)) { location.replace(`#/scan/${id}`); return; }
-  if (!R.job || R.job.id !== job.id) Object.assign(R, { tab: "all", q: "", adv: ADV0(), showAdv: false, sel: null });
+  if (!R.job || R.job.id !== job.id) Object.assign(R, { f: "all", q: "", sel: null, tab: "todo" });
   R.job = job;
   renderResults();
 }
-
+const portsChecked = (j) => ((j.scanned_ports || []).length ? `ตรวจ ${num(j.scanned_ports.length)} พอร์ต · ` : "");
+function counts(j) { const c = { critical: 0, high: 0, low: 0, safe: 0 }; j.devices.forEach((d) => c[d.severity]++); return c; }
 function renderResults() {
-  const j = R.job, c = { critical: 0, high: 0, low: 0, safe: 0 };
-  j.devices.forEach((d) => c[d.severity]++);
-  const risks = c.critical + c.high + c.low, demo = !!j.demo_scenario;
-  const headline = !j.devices.length ? "ไม่พบเครื่องที่ออนไลน์ในช่วงนี้"
-    : risks ? `พบ <span class="headline-num crit">${num(risks)}</span> เครื่องที่ควรแก้ไข`
-      : `<span class="headline-num ok">ไม่พบ</span>เครื่องที่เสี่ยง PHP2Shell`;
-  const types = [...new Set(j.devices.map((d) => d.device_type))].sort();
-  const branches = [...new Set(j.devices.map((d) => phpBranch(d.php_version)).filter(Boolean))].sort();
-  const ports = [...new Set(j.devices.flatMap(svcPorts))].sort((a, b) => a - b);
-  const anyCaution = j.devices.some((d) => cautions(d).length);
-  const portName = (p) => { for (const d of j.devices) { const x = (d.services || []).find((y) => y.port === p); if (x) return x.name; } return ""; };
-  const anyGov = j.devices.some((d) => d.matched_suffix);
-  const sel = (v, cur) => (String(v) === String(cur) ? "selected" : "");
-
-  render(`<section class="page"><div class="wrap">
-    <div class="page-head">
-      <div>
-        <div class="meta-line">${demo ? '<span class="badge demo">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}
-          <span class="mono">${esc(j.target_label)}</span><span>·</span><span>${fmtDate(j.created_at)}</span>
-          ${(j.scanned_ports || []).length ? `<span>·</span><span>ตรวจ ${num(j.scanned_ports.length)} พอร์ต</span>` : ""}
-          ${j.duration_s != null ? `<span>·</span><span>ใช้เวลา ${fmtDuration(j.duration_s)}</span>` : ""}
-          ${j.request && j.request.note ? `<span>·</span><span>${esc(j.request.note)}</span>` : ""}</div>
-        <h1>${headline}</h1>
+  const j = R.job, c = counts(j), risks = c.critical + c.high + c.low, demo = !!j.demo_scenario;
+  const scoreColor = j.security_score >= 80 ? "var(--ok-dot)" : j.security_score >= 65 ? "var(--warn-dot)" : "var(--crit-dot)";
+  const headline = !j.devices.length ? "ไม่พบเครื่องที่ออนไลน์ในช่วงนี้" : risks ? `พบ <span style="color:var(--crit)">${num(risks)} เครื่อง</span>ที่ควรแก้ไข` : `<span style="color:var(--ok)">ไม่พบ</span>เครื่องที่เสี่ยง PHP2Shell`;
+  render(`<div class="app">
+  <div class="page-head in1">
+    <div class="sec" style="min-width:0">
+      <p style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:13px;color:var(--muted)">
+        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
+        ${tip(`${demo ? "ผลจากข้อมูลจำลอง ไม่ได้ส่งสัญญาณไปที่เครือข่ายใด · " : ""}${portsChecked(j)}ใช้เวลา ${fmtDuration(j.duration_s)}`)}</p>
+      <h1 class="h1" style="margin-top:8px">${headline}</h1>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${demo ? `<a class="btn" href="#/">สแกนเครือข่ายจริง</a>` : `<button type="button" class="btn" id="rescan">${ic("refresh", 17)}สแกนอีกครั้ง</button>`}
+      ${dock("d-export", `<button type="button" class="btn btn-g">${ic("download", 17)}ส่งออก${chev.replace('class="chev"', 'class="chev" style="color:#fff;margin-left:0"')}</button>`, `<div class="stag" role="menu">
+        <a class="mi" role="menuitem" href="/api/scans/${esc(j.id)}/export.csv"><span><span style="display:block">CSV ทั้งชุด</span><span class="od">เปิดใน Excel ได้ · ทุกเครื่อง ทุกคอลัมน์</span></span></a>
+        ${j.devices.length ? `<button type="button" class="mi" role="menuitem" id="csv-view"><span><span style="display:block">CSV เฉพาะที่แสดงอยู่</span><span class="od" id="csv-n"></span></span></button>` : ""}
+        <a class="mi" role="menuitem" href="#/report/${esc(j.id)}"><span><span style="display:block">รายงานผู้บริหาร</span><span class="od">พิมพ์หรือบันทึก PDF</span></span></a>
+        <a class="mi" role="menuitem" href="/api/scans/${esc(j.id)}/export.json"><span><span style="display:block">JSON</span><span class="od">เชื่อมกับระบบอื่น</span></span></a></div>`, { w: 280, align: "end" })}
+    </div>
+  </div>
+  ${j.state === "cancelled" ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>การสแกนนี้ถูกหยุดก่อนเสร็จ ผลอาจไม่ครบทุกเครื่อง</span></p>` : ""}
+  ${j.state === "failed" ? `<p class="notice b-bad in1" style="margin-top:14px">${ic("alert", 20)}<span>การสแกนผิดพลาด: ${esc(j.error || "ไม่ทราบสาเหตุ")}</span></p>` : ""}
+  ${(j.intercepted_ports || []).length ? `<p class="notice b-blue in1" style="margin-top:14px">${ic("shield", 20)}<span>พบอุปกรณ์กลางทาง (เช่น proxy หรือ firewall) ตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(j.intercepted_ports.join(", "))}</span> — ระบบตัดเครื่องที่ไม่มีอยู่จริงออกให้แล้ว</span></p>` : ""}
+  <dl class="card stats in2" style="margin-top:16px;margin-bottom:0">
+    <div class="stat sec"><dt class="muted">ออนไลน์ ${tip("เครื่องที่ตอบรับการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง")}</dt><dd style="color:var(--blue-ink)"><span class="cnt" data-to="${j.devices.length}">0</span><small> / ${num(j.progress.total_ips)}</small></dd></div>
+    <div class="stat sec"><dt style="color:var(--crit)">ต้องแก้ด่วน ${tip("ใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell ผู้ไม่หวังดีอาจสั่งงานเครื่องได้ ควรอัปเดตก่อน")}</dt><dd style="color:var(--crit)"><span class="cnt" data-to="${c.critical}">0</span></dd></div>
+    <div class="stat sec"><dt style="color:var(--warn)">ควรแก้ไข ${tip("ความเสี่ยงรองลงมา เช่น PHP สาขาหมดอายุ ซ่อนเวอร์ชัน หรือยังไม่เปิด HSTS")}</dt><dd style="color:var(--warn)"><span class="cnt" data-to="${c.high + c.low}">0</span></dd></div>
+    <div class="stat sec" style="display:flex;align-items:center;justify-content:space-between;gap:8px"><div><dt class="muted">คะแนน ${tip("คำนวณโดย thscan: เริ่ม 100 หักเครื่องละ ด่วน 22 · สูง 14 · ต่ำ 4 ใช้ติดตามความคืบหน้า ไม่ใช่คะแนนรับรองจาก ThaiCERT")}</dt><dd><span class="cnt" data-to="${j.security_score}">0</span><small> · เกรด ${esc(j.security_grade)}</small></dd></div>
+      <svg viewBox="0 0 56 56" width="48" height="48" aria-hidden="true" style="flex:none;transform:rotate(-90deg)"><circle cx="28" cy="28" r="22" fill="none" stroke="#E1E6F5" stroke-width="7"/><circle id="gauge" cx="28" cy="28" r="22" pathLength="100" fill="none" stroke="${scoreColor}" stroke-width="7" stroke-linecap="round" style="stroke-dasharray:0 100;transition:stroke-dasharray 1.1s cubic-bezier(.2,.8,.2,1)"/></svg></div>
+  </dl>
+  ${j.devices.length ? `<div class="split" style="margin-top:16px">
+    <section class="card listcard in3" aria-label="รายการเครื่อง">
+      <div style="display:flex;gap:8px">
+        <div style="flex:1;min-width:0">${dock("d-filter", `<button type="button" class="peek flat" id="filter-peek"></button>`, `<div class="stag" role="group" aria-label="ตัวกรอง" id="filter-list"></div>`, { w: 290 })}</div>
+        <label class="search" id="search">${ic("search", 19, 2.2)}<span class="sr">ค้นหา IP ชื่อเครื่อง PHP หรือพอร์ต</span><input type="search" id="q" placeholder="ค้นหา…" value="${esc(R.q)}"></label>
       </div>
-      <div class="page-actions">
-        ${demo ? `<a class="btn btn-secondary" href="#/">สแกนเครือข่ายจริง</a>`
-          : `<button class="btn btn-secondary" id="rescan">${icon("refresh")}สแกนช่วงนี้อีกครั้ง</button>`}
-        <div class="menu-wrap"><button class="btn btn-primary" id="export-btn" aria-haspopup="menu" aria-expanded="false">${icon("download")}ส่งออก</button>
-          <div class="menu" id="export-menu" role="menu" hidden>
-            <button role="menuitem" data-exp="csv">${icon("table")}<span><b>CSV ทั้งชุด</b><small>เปิดใน Excel ได้ · ทุกเครื่อง ทุกคอลัมน์</small></span></button>
-            <button role="menuitem" data-exp="csv-view">${icon("list")}<span><b>CSV เฉพาะที่กรองอยู่</b><small id="exp-n">ตามตัวกรองและคำค้นปัจจุบัน</small></span></button>
-            <button role="menuitem" data-exp="report">${icon("file")}<span><b>รายงานสรุปสำหรับผู้บริหาร</b><small>พิมพ์หรือบันทึกเป็น PDF</small></span></button>
-            <button role="menuitem" data-exp="json">${icon("code")}<span><b>JSON</b><small>ข้อมูลดิบสำหรับเชื่อมกับระบบอื่น</small></span></button>
-          </div></div>
-      </div>
-    </div>
-
-    ${demo ? `<div class="notice info">${icon("info")}<span>นี่คือตัวอย่างจาก<strong>ข้อมูลจำลอง</strong> ไม่ใช่เครือข่ายของคุณ ไม่มีการส่งสัญญาณไปยังเครื่องใด · <a href="#/">เริ่มสแกนจริง</a></span></div>` : ""}
-    ${j.state === "cancelled" ? `<div class="notice warn">${icon("alert")}<span>การสแกนนี้ถูกหยุดก่อนเสร็จ ผลด้านล่างอาจไม่ครบทุกเครื่อง</span></div>` : ""}
-    ${j.state === "failed" ? `<div class="notice warn">${icon("alert")}<span>การสแกนผิดพลาด: ${esc(j.error || "ไม่ทราบสาเหตุ")}</span></div>` : ""}
-    ${(j.intercepted_ports || []).length ? `<div class="notice info">${icon("shield")}<span>พบอุปกรณ์กลางทาง (เช่น proxy หรือ firewall) ตอบรับแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(j.intercepted_ports.join(", "))}</span> — thscan ตัดเครื่องที่ไม่มีอยู่จริงออกให้แล้ว ${tip(TIPS.intercept)}</span></div>` : ""}
-
-    <div class="stats">
-      <div class="stat"><span class="label">ออนไลน์ ${tip(TIPS.online)}</span><div class="value">${num(j.devices.length)}<small> / ${num(j.progress.total_ips)}</small></div></div>
-      <div class="stat crit"><span class="label">ต้องแก้ด่วน</span><div class="value">${num(c.critical)}</div></div>
-      <div class="stat warn"><span class="label">ควรแก้ไข</span><div class="value">${num(c.high + c.low)}</div></div>
-      <div class="stat ${j.security_score >= 80 ? "ok" : j.security_score >= 65 ? "warn" : "crit"}"><span class="label">คะแนนความปลอดภัย ${tip(TIPS.score)}</span>
-        <div class="value">${num(j.security_score)}<small> / 100 · ${esc(j.security_grade)}</small></div></div>
-    </div>
-
-    ${j.devices.length ? `
-    <div class="toolbar">
-      <div class="seg" role="tablist" aria-label="กรองตามผล">
-        ${[["all", "ทั้งหมด", j.devices.length], ["urgent", "ต้องแก้ด่วน", c.critical], ["fix", "ควรแก้ไข", c.high + c.low], ["ok", "ผ่าน", c.safe]]
-          .map(([k, t, n]) => `<button type="button" role="tab" data-tab="${k}" aria-pressed="${R.tab === k}" aria-selected="${R.tab === k}">${t}<span class="count">${num(n)}</span></button>`).join("")}
-      </div>
-      <span class="grow"></span>
-      <label class="search"><span class="sr-only">ค้นหา</span>${icon("search")}<input type="search" id="q" value="${esc(R.q)}" placeholder="ค้นหา IP ชื่อเครื่อง PHP CVE…" autocomplete="off"></label>
-      <button class="btn btn-secondary" id="adv-btn" aria-expanded="${R.showAdv}" aria-controls="filters">${icon("sliders")}ตัวกรองเพิ่มเติม${advCount() ? ` (${advCount()})` : ""}</button>
-    </div>
-    <div class="filters" id="filters" ${R.showAdv ? "" : "hidden"}>
-      <label>ประเภทอุปกรณ์<select class="select" data-adv="type"><option value="">ทั้งหมด</option>
-        ${types.map((t) => `<option value="${esc(t)}" ${sel(t, R.adv.type)}>${esc(devType(t))}</option>`).join("")}</select></label>
-      <label>เวอร์ชัน PHP<select class="select" data-adv="php"><option value="">ทั้งหมด</option><option value="none" ${sel("none", R.adv.php)}>ไม่พบ PHP</option>
-        ${branches.map((b) => `<option value="${esc(b)}" ${sel(b, R.adv.php)}>PHP ${esc(b)}.x</option>`).join("")}</select></label>
-      <label>พอร์ตที่เปิด<select class="select" data-adv="port"><option value="">ทั้งหมด</option>
-        ${ports.map((p) => `<option value="${p}" ${sel(p, R.adv.port)}>${p}${portName(p) && portName(p) !== "ไม่ทราบ" ? ` · ${esc(portName(p))}` : ""}</option>`).join("")}</select></label>
-      ${anyCaution ? `<label style="display:flex;align-items:center;gap:8px;height:40px;font-size:var(--fs-sm);color:var(--ink)">
-        <input type="checkbox" data-adv="caution" ${R.adv.caution ? "checked" : ""}> เฉพาะเครื่องที่มีพอร์ตควรระวัง</label>` : ""}
-      ${anyGov ? `<label style="display:flex;align-items:center;gap:8px;height:40px;font-size:var(--fs-sm);color:var(--ink)">
-        <input type="checkbox" data-adv="gov" ${R.adv.gov ? "checked" : ""}> เฉพาะชื่อโดเมนหน่วยงาน (.go.th ฯลฯ)</label>` : ""}
-      <button class="btn btn-quiet" id="adv-clear">ล้างตัวกรอง</button>
-    </div>
-    <div class="split" id="split">
-      <div class="list" id="list" role="listbox" aria-label="รายการเครื่อง"></div>
-      <div class="detail" id="detail" aria-live="polite"></div>
-    </div>` : `<div class="empty" style="border:1px solid var(--line);border-radius:var(--r-lg)">
-      <h3>ไม่มีเครื่องที่ตอบสนองในช่วงนี้</h3>
-      <p>อาจเป็นเพราะเครื่องปิดอยู่ ไฟร์วอลล์บล็อกการเชื่อมต่อ หรือช่วง IP ไม่ตรงกับเครือข่ายจริง ลองตรวจช่วงอีกครั้ง หรือเลือกวงอื่น</p>
-      <p style="margin-top:24px"><a class="btn btn-secondary" href="#/">เลือกเป้าหมายใหม่</a></p></div>`}
-  </div></section>`);
-
-  wireResults();
-  if (j.devices.length) { paintList(); paintDetail(); }
-}
-
-function wireResults() {
-  const j = R.job;
-  const btn = $("#export-btn"), menu = $("#export-menu");
-  const closeMenu = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute("aria-expanded", String(!menu.hidden));
-    if (!menu.hidden) { $("#exp-n").textContent = `${num(j.devices.length ? filtered().length : 0)} เครื่อง ตามตัวกรองปัจจุบัน`; menu.querySelector("button").focus(); }
-  });
-  const offMenu = (e) => { if (!e.target.closest(".menu-wrap")) closeMenu(); };
-  document.addEventListener("click", offMenu);
-  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeMenu(); btn.focus(); } });
-  cleanup = () => document.removeEventListener("click", offMenu);
-  menu.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-exp]"); if (!b) return;
-    closeMenu();
-    const k = b.dataset.exp;
-    if (k === "csv") location.href = `/api/scans/${j.id}/export.csv`;
-    else if (k === "json") location.href = `/api/scans/${j.id}/export.json`;
-    else if (k === "report") location.hash = `#/report/${j.id}`;
-    else downloadCsv(filtered(), `thscan-${j.id}-filtered.csv`);
-  });
+      <div class="rows" role="listbox" aria-label="เครื่องที่พบ" id="rows"></div>
+    </section>
+    <section class="card hostcard in4" aria-label="เครื่องที่เลือก" id="host"></section>
+  </div>` : `<div class="card in3" style="margin-top:16px;padding:32px;text-align:center"><h2 style="font-size:20px">ไม่มีเครื่องที่ตอบสนองในช่วงนี้</h2>
+    <p class="lead">เครื่องอาจปิดอยู่ ไฟร์วอลล์บล็อกการเชื่อมต่อ หรือช่วง IP ไม่ตรงกับเครือข่ายจริง ลองเลือกชุดพอร์ตที่กว้างขึ้น หรือเลือกวงอื่น</p>
+    <p style="margin-top:16px"><a class="btn" href="#/">เลือกเป้าหมายใหม่</a></p></div>`}
+  </div>`);
+  $$(".cnt").forEach((el) => tween(el, +el.dataset.to, 1100));
+  requestAnimationFrame(() => requestAnimationFrame(() => { const g = $("#gauge"); if (g) g.style.strokeDasharray = `${j.security_score} 100`; }));
   const rescan = $("#rescan");
   rescan && rescan.addEventListener("click", async () => {
     rescan.disabled = true;
-    try { await startScan({ targets: j.request.targets }); } catch (err) { toast(err.message); rescan.disabled = false; }
+    const r = j.request || {};
+    const base = { port_profile: r.port_profile, custom_ports: r.custom_ports };
+    try { await startScan(r.sites && r.sites.length ? { ...base, sites: r.sites } : { ...base, targets: r.targets }); }
+    catch (err) { toast(err.message); rescan.disabled = false; }
   });
   if (!j.devices.length) return;
-
-  $$("[data-tab]").forEach((b) => b.addEventListener("click", () => {
-    R.tab = b.dataset.tab;
-    $$("[data-tab]").forEach((x) => { x.setAttribute("aria-pressed", String(x === b)); x.setAttribute("aria-selected", String(x === b)); });
-    paintList(true);
-  }));
+  $("#csv-view").addEventListener("click", () => { shut($("#d-export")); downloadCsv(filteredDevices(), `thscan-${j.id}-filtered.csv`); });
+  $("#filter-list").addEventListener("click", (e) => { const b = e.target.closest("[data-f]"); if (b) { R.f = b.dataset.f; shut($("#d-filter")); paintList(true); } });
   $("#q").addEventListener("input", (e) => { R.q = e.target.value; paintList(true); });
-  $("#adv-btn").addEventListener("click", (e) => {
-    R.showAdv = !R.showAdv; $("#filters").hidden = !R.showAdv; e.currentTarget.setAttribute("aria-expanded", String(R.showAdv));
-  });
-  const advLabel = () => { $("#adv-btn").lastChild.textContent = `ตัวกรองเพิ่มเติม${advCount() ? ` (${advCount()})` : ""}`; };
-  $("#filters").addEventListener("change", (e) => {
-    const k = e.target.dataset.adv; if (!k) return;
-    R.adv[k] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
-    advLabel(); paintList(true);
-  });
-  $("#adv-clear").addEventListener("click", () => {
-    R.adv = ADV0();
-    $$("[data-adv]").forEach((x) => { if (x.type === "checkbox") x.checked = false; else x.value = ""; });
-    advLabel(); paintList(true);
-  });
-  $("#list").addEventListener("click", (e) => { const r = e.target.closest("[data-ip]"); if (r) selectDevice(r.dataset.ip, true); });
-  $("#list").addEventListener("keydown", (e) => {
+  $("#rows").addEventListener("click", (e) => { const r = e.target.closest("[data-ip]"); if (r) selectHost(r.dataset.ip); });
+  $("#rows").addEventListener("keydown", (e) => {
     if (!["ArrowDown", "ArrowUp"].includes(e.key)) return;
     e.preventDefault();
-    const rows = $$("[data-ip]", $("#list")), i = rows.findIndex((r) => r.dataset.ip === R.sel);
+    const rows = $$("[data-ip]", $("#rows")), i = rows.findIndex((r) => r.dataset.ip === R.sel);
     const n = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    if (n) { selectDevice(n.dataset.ip, false); n.focus(); }
+    if (n) { selectHost(n.dataset.ip); n.focus(); }
   });
+  // tabs switch on hover as well as click/focus
+  const pickTab = (e) => { const t = e.target.closest("[data-tab]"); if (t && t.dataset.tab !== R.tab) { R.tab = t.dataset.tab; R.tswap = 1 - R.tswap; paintTabs(); } };
+  const hostEl = $("#host");
+  hostEl.addEventListener("mouseover", pickTab); hostEl.addEventListener("click", pickTab); hostEl.addEventListener("focusin", pickTab);
+  paintList(true);
 }
-
 function paintList(fromFilter) {
-  const list = filtered(), el = $("#list");
-  if (fromFilter && !list.some((d) => d.ip === R.sel)) R.sel = null;
-  if (!R.sel && list.length && matchMedia("(min-width: 961px)").matches) R.sel = list[0].ip;
-  el.innerHTML = list.length ? list.map((d) => `<button type="button" class="row" role="option" data-ip="${esc(d.ip)}" aria-selected="${d.ip === R.sel}">
-      <span class="ip">${esc(d.ip)}</span>${sevBadge(d.severity)}
-      <span class="host">${esc(d.hostname || devType(d.device_type))}${d.php_version ? ` · PHP ${esc(d.php_version)}` : ""}</span></button>`).join("")
-    : `<div class="empty"><h3>ไม่มีเครื่องที่ตรงกับเงื่อนไข</h3><p>ลองล้างคำค้นหรือตัวกรอง</p>
-       <p style="margin-top:16px"><button class="btn btn-secondary" id="reset-filters">ล้างทั้งหมด</button></p></div>`;
-  const reset = $("#reset-filters");
-  reset && reset.addEventListener("click", () => {
-    R.tab = "all"; R.q = ""; R.adv = ADV0(); renderResults();
-  });
-  if (fromFilter) paintDetail();
+  const j = R.job, list = filteredDevices();
+  const fc = FILTERS.find((f) => f[0] === R.f);
+  $("#filter-peek").innerHTML = `<span class="dot" style="background:${fc[2]}"></span><span style="min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fc[1]} (${num(list.length)})</span>${chev}`;
+  $("#filter-list").innerHTML = FILTERS.map(([k, label, color]) => `<button type="button" class="mi" data-f="${k}" aria-pressed="${R.f === k}"><span class="dot" style="background:${color}"></span>${label}<span class="n">${num(j.devices.filter((d) => hasFilter(d, k)).length)}</span></button>`).join("");
+  $("#search").classList.toggle("filled", !!R.q);
+  const n = $("#csv-n"); if (n) n.textContent = `${num(list.length)} เครื่อง ตามตัวกรองตอนนี้`;
+  if (fromFilter && !list.some((d) => d.ip === R.sel)) R.sel = list[0] ? list[0].ip : null;
+  if (!R.sel && list[0]) R.sel = list[0].ip;
+  $("#rows").innerHTML = list.length ? list.map((d) => `<button type="button" class="row" role="option" data-ip="${esc(d.ip)}" aria-selected="${d.ip === R.sel}">
+      <span style="min-width:0;flex:1"><span class="ip">${esc(d.ip)}</span><span class="sub">${esc(d.hostname || devType(d.device_type))}</span></span>
+      <span class="more">${esc(d.php_version ? `PHP ${d.php_version}` : devType(d.device_type))}</span>${sevBadge(d.severity)}</button>`).join("")
+    : `<p style="margin:12px 6px;font-size:14px;color:var(--muted)">ไม่มีเครื่องที่ตรงกับเงื่อนไข · <button type="button" class="ghost" id="reset" style="min-height:44px;padding:0 4px">ล้างตัวกรอง</button></p>`;
+  const reset = $("#reset");
+  reset && reset.addEventListener("click", () => { R.f = "all"; R.q = ""; $("#q").value = ""; paintList(true); });
+  paintHost();
 }
-
-function selectDevice(ip, scroll) {
-  R.sel = ip;
-  $$("[data-ip]", $("#list")).forEach((r) => r.setAttribute("aria-selected", String(r.dataset.ip === ip)));
-  paintDetail();
-  if (scroll && !matchMedia("(min-width: 961px)").matches) $("#split").scrollIntoView({ behavior: "smooth", block: "start" });
+function selectHost(ip) {
+  if (ip === R.sel) return;
+  R.sel = ip; R.swap = 1 - R.swap;
+  $$("[data-ip]", $("#rows")).forEach((r) => r.setAttribute("aria-selected", String(r.dataset.ip === ip)));
+  paintHost();
+  if (innerWidth < 900) $("#host").scrollIntoView({ behavior: reduceMotion() ? "auto" : "smooth", block: "start" });
 }
-
-function todoFor(d) {
-  const recs = [...d.findings].sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank).map((f) => f.recommendation).filter(Boolean);
-  const out = [...new Set(recs)];
-  if (!out.length) out.push(d.php_version || d.open_ports.length ? "ไม่ต้องดำเนินการเพิ่ม — ตั้งเวลาสแกนซ้ำเป็นระยะเพื่อเฝ้าระวัง" : "เครื่องนี้ไม่มีบริการเว็บ จึงไม่ได้รับผลกระทบจาก PHP2Shell");
-  else out.push("เมื่อแก้ไขแล้ว กด “ตรวจซ้ำเครื่องนี้” ด้านล่างเพื่อยืนยันผล");
-  return out;
+function cubeSvg(d) {
+  const pitch = 35 * Math.PI / 180, yaw = 35 * Math.PI / 180, c = [];
+  for (let i = 0; i < 8; i += 1) {
+    const x = (i & 1) ? 1 : -1, y = (i & 2) ? 1 : -1, z = (i & 4) ? 1 : -1;
+    const rx = x * Math.cos(yaw) - z * Math.sin(yaw), rz = x * Math.sin(yaw) + z * Math.cos(yaw);
+    const ry = y * Math.cos(pitch) - rz * Math.sin(pitch), depth = y * Math.sin(pitch) + rz * Math.cos(pitch);
+    c.push({ x: 200 + rx * 82, y: 170 - ry * 82, depth });
+  }
+  let vis = "", hid = "";
+  for (let a = 0; a < 8; a += 1) for (let b = a + 1; b < 8; b += 1) {
+    const k = a ^ b;
+    if (k === 1 || k === 2 || k === 4) {
+      const seg = `M${c[a].x.toFixed(1)} ${c[a].y.toFixed(1)}L${c[b].x.toFixed(1)} ${c[b].y.toFixed(1)}`;
+      if ((c[a].depth + c[b].depth) / 2 < -0.1) hid += seg; else vis += seg;
+    }
+  }
+  const n = Math.min(6, services(d).length);
+  let slots = "";
+  for (let k = 0; k < n; k += 1) {
+    const t = (k + 1) / (n + 1);
+    const ax = c[0].x + (c[2].x - c[0].x) * t, ay = c[0].y + (c[2].y - c[0].y) * t, bx = c[1].x + (c[3].x - c[1].x) * t, by = c[1].y + (c[3].y - c[1].y) * t;
+    slots += `M${(ax + (bx - ax) * 0.18).toFixed(1)} ${(ay + (by - ay) * 0.18).toFixed(1)}L${(ax + (bx - ax) * 0.55).toFixed(1)} ${(ay + (by - ay) * 0.55).toFixed(1)}`;
+  }
+  return `<svg viewBox="76 46 248 256" role="img" aria-label="เครื่อง ${esc(d.ip)} เปิด ${services(d).length} พอร์ต" style="flex:none;width:104px;height:auto">
+    <defs><linearGradient id="hgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2F5BEA"/><stop offset="1" stop-color="#6D4AFF"/></linearGradient></defs>
+    <ellipse cx="200" cy="268" rx="90" ry="12" fill="#2F3B8C" opacity=".12" style="filter:blur(5px)"/>
+    <path d="${hid || "M0 0"}" fill="none" stroke="#B4BDF2" stroke-width="1.5"/>
+    <path d="${vis}" fill="none" stroke="url(#hgrad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="${slots || "M0 0"}" fill="none" stroke="${SEV[d.severity].dot}" stroke-width="3" stroke-linecap="round"/></svg>`;
 }
-
-function paintDetail() {
-  const el = $("#detail"), split = $("#split");
-  const d = R.job.devices.find((x) => x.ip === R.sel);
-  split.classList.toggle("show-detail", !!d);
-  if (!d) { el.innerHTML = `<div class="empty"><h3>เลือกเครื่องจากรายการ</h3><p>รายละเอียด สิ่งที่พบ และวิธีแก้จะแสดงที่นี่</p></div>`; return; }
-  const demo = !!R.job.demo_scenario, s = SEV[d.severity];
-  const kv = [
-    ["IP", `<span class="mono">${esc(d.ip)}</span>`],
-    ["ชื่อโฮสต์", d.hostname ? `${esc(d.hostname)}${d.matched_suffix ? ` <span class="badge plain">${esc(d.matched_suffix)}</span>` : ""}` : "—", TIPS.host],
-    ["MAC", d.mac ? `<span class="mono">${esc(d.mac)}</span>` : "—", TIPS.mac],
-    ["ประเภทอุปกรณ์", esc(devType(d.device_type)), TIPS.type],
-    ["บริการ", esc(d.service)],
-    ["เวอร์ชัน PHP", d.php_version ? `<span class="mono">${esc(d.php_version)}</span>` : "ไม่พบ", TIPS.php],
-    ["เว็บเซิร์ฟเวอร์", d.server ? esc(d.server) : "—"],
-    ["CMS", d.cms ? esc(d.cms) : "—"],
-    ["พอร์ตเว็บที่เปิด", d.open_ports.length ? `<span class="mono">${esc(d.open_ports.join(", "))}</span>` : "—", TIPS.ports],
-    ["เวลาตอบสนอง", d.latency_ms != null ? `${num(d.latency_ms)} ms` : "—", TIPS.latency],
-  ];
-  const headers = Object.entries(d.headers || {});
-  el.innerHTML = `
-    <button class="btn btn-quiet detail-back" id="back">${icon("back")}กลับไปที่รายการ</button>
-    <h2>${esc(d.ip)}</h2>
-    <p class="sub">${esc(d.hostname || "ไม่มีชื่อโฮสต์")} · ${esc(devType(d.device_type))}</p>
-    <div class="verdict ${s.verdict}"><b>${s.title}</b><span>${esc(d.assessment)}</span></div>
-
-    <div class="block"><h3>สิ่งที่ควรทำ</h3><ol class="todo">${todoFor(d).map((t) => `<li><span>${esc(t)}</span></li>`).join("")}</ol></div>
-
-    ${d.findings.length ? `<div class="block"><h3>สิ่งที่ตรวจพบ (${d.findings.length}) ${tip(TIPS.confidence)}</h3>
-      ${d.findings.map((f) => `<div class="finding"><div class="finding-top"><h4>${esc(f.title)}</h4>${sevBadge(f.severity)}</div>
-        <p>${esc(f.description)}</p>
-        ${f.evidence ? `<div class="evidence">${esc(f.evidence)}</div>` : ""}
-        <div class="cves"><span class="badge plain">ความมั่นใจ: ${CONF[f.confidence] || esc(f.confidence)}</span>
-          ${f.cve.map((c) => `<span class="badge plain mono">${esc(c)}</span>`).join("")}
-          ${f.cvss != null ? `<span class="badge plain">CVSS ${esc(f.cvss)}</span>` : ""}</div></div>`).join("")}</div>` : ""}
-
-    ${d.services && d.services.length ? `<div class="block"><h3>พอร์ตและบริการที่เปิด (${d.services.length}) ${tip(TIPS.services)}</h3>
-      <ul class="svc">${d.services.map((x) => `<li><span class="svc-port mono">${x.port}</span>
-        <span><b>${esc(x.name)}</b> <span class="muted">· ${esc(x.description)}</span>
-        ${x.note ? `<span class="svc-note">${icon("alert")}${esc(x.note)}</span>` : ""}</span></li>`).join("")}</ul></div>`
-      : (R.job.scanned_ports || []).length ? `<div class="block"><h3>พอร์ตและบริการที่เปิด</h3><p class="muted" style="font-size:var(--fs-sm)">ไม่พบพอร์ตที่เปิดจาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ (เครื่องตอบกลับแต่ปฏิเสธการเชื่อมต่อทุกพอร์ต)</p></div>` : ""}
-
-    <div class="block"><h3>ข้อมูลเครื่อง</h3>
-      <dl class="kv">${kv.map(([k, v, t]) => `<dt>${k}${t ? ` ${tip(t)}` : ""}</dt><dd>${v}</dd>`).join("")}</dl>
-      ${headers.length ? `<details class="raw"><summary>ดู header ที่เว็บตอบกลับ (สำหรับเจ้าหน้าที่เทคนิค)</summary>
-        <div class="evidence">${headers.map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("\n")}</div></details>` : ""}
-    </div>
-
-    <div class="detail-actions">
-      <button class="btn ${d.severity === "safe" ? "btn-secondary" : "btn-primary"}" id="recheck">${icon("refresh")}${demo ? "จำลองการแก้ไข (ตัวอย่าง)" : "ตรวจซ้ำเครื่องนี้"}</button>
-      <button class="btn btn-secondary" id="copy">${icon("copy")}คัดลอกสรุป</button>
-    </div>
-    ${d.checked_at ? `<p class="stamp">ตรวจซ้ำล่าสุด ${fmtDate(d.checked_at)}</p>` : ""}
-    ${d.patched_at ? `<p class="stamp">จำลองการแก้ไขเมื่อ ${fmtDate(d.patched_at)} (ข้อมูลตัวอย่าง)</p>` : ""}
-    ${demo ? "" : `<p class="stamp">“ตรวจซ้ำ” จะสแกนเครื่องนี้ใหม่จริงอีกครั้ง แล้วแทนที่ผลเดิมด้วยผลล่าสุด</p>`}`;
-
-  const back = $("#back");
-  back.addEventListener("click", () => {
-    R.sel = null; split.classList.remove("show-detail");
-    $$("[data-ip]", $("#list")).forEach((r) => r.setAttribute("aria-selected", "false"));
-    $("#split").scrollIntoView({ block: "start" });
-  });
+function paintHost() {
+  const host = $("#host"), d = R.job.devices.find((x) => x.ip === R.sel);
+  if (!d) { host.innerHTML = `<div style="padding:40px 10px;text-align:center"><h2 style="font-size:18px">เลือกเครื่องจากรายการ</h2><p class="lead">รายละเอียด สิ่งที่ควรทำ และพอร์ตที่เปิดจะแสดงที่นี่</p></div>`; return; }
+  const s = SEV[d.severity], demo = !!R.job.demo_scenario, todo = todoFor(d), svc = services(d);
+  const TABS = [["todo", "สิ่งที่ควรทำ", todo.length], ["find", "ที่ตรวจพบ", d.findings.length], ["ports", "พอร์ต", svc.length], ["info", "ข้อมูลเครื่อง", "·"]];
+  host.innerHTML = `<div class="swap${R.swap}">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">${cubeSvg(d)}
+      <div style="flex:1;min-width:200px">${sevBadge(d.severity)}
+        <div class="big" style="margin-top:6px">${esc(d.ip)}</div>
+        <div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(d.hostname || "ไม่มีชื่อโฮสต์")} · ${esc(devType(d.device_type))}</div></div></div>
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-top:14px;padding:12px 14px;border-radius:16px;background:${s.bg};color:${s.fg}">
+      <span style="flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;background:var(--grad)">1</span>
+      <div style="min-width:0"><div style="font-size:12px;font-weight:700">${esc(s.title)} · ขั้นต่อไป</div><div style="font-size:14.5px;font-weight:600;line-height:1.55">${esc(todo[0])}</div></div></div>
+  </div>
+  <div class="tabs" role="tablist" aria-label="รายละเอียดเครื่อง" style="--n:4;margin-top:16px">
+    ${TABS.map(([id, label, n]) => `<button type="button" class="tab" role="tab" data-tab="${id}" aria-selected="${R.tab === id}">${label}<span class="c">${n}</span></button>`).join("")}
+    <span class="tabbar" aria-hidden="true" id="tabbar"></span></div>
+  <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
+  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">
+    <button type="button" class="btn" id="recheck">${ic("refresh", 17)}<span>${demo ? "จำลองการแก้ไข (ตัวอย่าง)" : "ตรวจซ้ำเครื่องนี้"}</span></button>
+    <button type="button" class="btn" id="copy">${ic("copy", 17)}<span>คัดลอกสรุป</span></button>
+    <span class="muted" style="font-size:12.5px">${d.checked_at ? `ตรวจซ้ำล่าสุด ${esc(fmtDate(d.checked_at))}` : d.patched_at ? `จำลองการแก้ไขเมื่อ ${esc(fmtDate(d.patched_at))} (ตัวอย่าง)` : demo ? "" : "“ตรวจซ้ำ” จะสแกนเครื่องนี้ใหม่จริงอีกครั้ง"}</span>
+  </div>`;
+  paintTabs();
   $("#copy").addEventListener("click", async () => {
-    const lines = [`${d.ip}${d.hostname ? ` (${d.hostname})` : ""}`, `ผล: ${s.label} — ${d.assessment}`,
-      `PHP: ${d.php_version || "ไม่พบ"} · พอร์ตที่เปิด: ${(d.services || []).map((x) => `${x.port}/${x.name}`).join(", ") || d.open_ports.join(", ") || "—"}`,
-      ...d.findings.map((f) => `- ${f.title}${f.cve.length ? ` [${f.cve.join(", ")}]` : ""}`),
-      "สิ่งที่ควรทำ:", ...todoFor(d).map((t, i) => `${i + 1}. ${t}`)];
+    const lines = [`${d.ip}${d.hostname ? ` (${d.hostname})` : ""}`, `ผล: ${s.word} — ${d.assessment}`,
+      `PHP: ${d.php_version || "ไม่พบ"} · พอร์ตที่เปิด: ${svc.map((x) => `${x.port}/${x.name}`).join(", ") || "—"}`,
+      ...d.findings.map((f) => `- ${f.title}${f.cve.length ? ` [${f.cve.join(", ")}]` : ""}`), "สิ่งที่ควรทำ:", ...todo.map((t, i) => `${i + 1}. ${t}`)];
     if (demo) lines.unshift("[ตัวอย่าง · ข้อมูลจำลอง]");
     toast((await copyText(lines.join("\n"))) ? "คัดลอกสรุปแล้ว" : "คัดลอกไม่สำเร็จ");
   });
   $("#recheck").addEventListener("click", async (e) => {
-    const b = e.currentTarget; b.disabled = true; b.lastChild.textContent = demo ? "กำลังจำลอง…" : "กำลังตรวจซ้ำ…";
+    const b = e.currentTarget, label = $("span", b), was = label.textContent;
+    b.disabled = true; label.textContent = demo ? "กำลังจำลอง…" : "กำลังตรวจซ้ำ…";
     try {
       const res = await api(`/api/scans/${R.job.id}/devices/${encodeURIComponent(d.ip)}/recheck`, { method: "POST" });
       R.job = res.job;
       const after = res.device.severity;
       if (res.simulated) toast("จำลองการแก้ไขแล้ว — นี่คือข้อมูลตัวอย่าง ไม่ใช่ผลจริง");
       else if (!res.online) toast("เครื่องนี้ไม่ตอบสนองในตอนนี้ — ยังคงแสดงผลเดิมไว้");
-      else toast(after === res.severity_before ? `ตรวจซ้ำแล้ว: ผลยังเป็น “${SEV[after].label}”` : `ตรวจซ้ำแล้ว: ${SEV[res.severity_before].label} → ${SEV[after].label}`);
+      else toast(after === res.severity_before ? `ตรวจซ้ำแล้ว: ผลยังเป็น “${SEV[after].word}”` : `ตรวจซ้ำแล้ว: ${SEV[res.severity_before].word} → ${SEV[after].word}`);
       R.sel = d.ip; renderResults();
-    } catch (err) { toast(err.message); b.disabled = false; b.lastChild.textContent = demo ? "จำลองการแก้ไข (ตัวอย่าง)" : "ตรวจซ้ำเครื่องนี้"; }
+    } catch (err) { toast(err.message); b.disabled = false; label.textContent = was; }
   });
 }
-
+function paintTabs() {
+  const d = R.job.devices.find((x) => x.ip === R.sel);
+  if (!d) return;
+  const ids = ["todo", "find", "ports", "info"];
+  $$("[data-tab]").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.tab === R.tab)));
+  $("#tabbar").style.transform = `translateX(${ids.indexOf(R.tab) * 100}%)`;
+  let html = "";
+  if (R.tab === "todo") html = `<ol class="todo">${todoFor(d).map((t, i) => `<li><span>${i + 1}</span><span>${esc(t)}</span></li>`).join("")}</ol>`;
+  else if (R.tab === "find") html = d.findings.length ? d.findings.map((f) => `<article class="finding">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><h3 style="font-size:14px;line-height:1.5">${esc(f.title)}</h3>${sevBadge(f.severity)}</div>
+      <p style="margin-top:4px;font-size:13px;color:var(--muted)">${esc(f.description)}</p>
+      <p style="margin-top:6px;font-size:12.5px;color:var(--muted)">ความมั่นใจ ${esc(CONF[f.confidence] || f.confidence)}${f.cve.length ? ` · ${esc(f.cve.join(", "))}` : ""}${f.cvss != null ? ` · CVSS ${esc(f.cvss)}` : ""}</p>
+      ${f.evidence ? `<div class="evidence">${esc(f.evidence)}</div>` : ""}</article>`).join("") : `<p style="font-size:14px;font-weight:600;color:var(--ok)">✓ ไม่พบปัญหาบนเครื่องนี้</p>`;
+  else if (R.tab === "ports") {
+    const svc = services(d);
+    html = svc.length ? `<ul class="ports">${svc.map((x) => `<li class="port ${x.note ? "warn" : ""}"><span class="pnum">${x.port}</span><span style="min-width:0"><span class="ot">${esc(x.name)}</span><span class="od">${esc(x.description || "")}</span>${x.note ? `<span class="od" style="margin-top:3px;font-weight:600;color:var(--warn)">ควรระวัง: ${esc(x.note)}</span>` : ""}</span></li>`).join("")}</ul>
+      <p class="sec" style="margin-top:10px;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px">พอร์ตที่ควรระวังไม่ใช่ช่องโหว่ และไม่ลดคะแนน ${tip("พอร์ตที่เปิดอยู่อาจจำเป็นต่อการใช้งาน ระบบแค่เตือนให้ตรวจดูว่าควรจำกัดผู้เข้าถึงหรือไม่")}</p>`
+      : `<p class="muted" style="font-size:14px">ไม่พบพอร์ตที่เปิด${(R.job.scanned_ports || []).length ? ` จาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ` : ""}</p>`;
+  } else {
+    const kv = [["IP", d.ip, ""], ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
+      ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นเฉพาะเครื่องในวง LAN เดียวกับเครื่องที่รัน thscan"], ["ประเภท", devType(d.device_type), "คาดเดาจากบริการที่เปิดอยู่ อาจไม่แม่นยำ 100%"],
+      ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
+      ["CMS", d.cms || "—", ""], ["พอร์ตเว็บ", d.open_ports.join(", ") || "—", "พอร์ตที่ตอบกลับเป็นเว็บจริงระหว่างการสแกน"],
+      ["เวลาตอบสนอง", d.latency_ms != null ? `${num(d.latency_ms)} ms` : "—", "เวลาที่เครื่องใช้ตอบกลับ ยิ่งน้อยยิ่งเร็ว"]];
+    const headers = Object.entries(d.headers || {});
+    html = `<dl class="kv">${kv.map(([k, v, h]) => `<div class="sec"><dt>${k}${h ? ` ${tip(h)}` : ""}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
+      ${headers.length ? `<details class="raw"><summary>ดู header ที่เว็บตอบกลับ (สำหรับเจ้าหน้าที่เทคนิค)</summary><div class="evidence">${esc(headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</div></details>` : ""}`;
+  }
+  const panel = $("#tabpanel");
+  panel.className = `tabpanel swap${R.tswap}`;
+  panel.innerHTML = html;
+}
 function downloadCsv(devices, name) {
   const cell = (v) => { let s = String(v ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replace(/"/g, '""')}"`; };
   const head = ["ip", "hostname", "mac", "device_type", "service", "php_version", "cms", "open_ports", "open_services", "latency_ms", "severity", "assessment", "cve"];
   const rows = devices.map((d) => [d.ip, d.hostname, d.mac, d.device_type, d.service, d.php_version, d.cms, d.open_ports.join(" "),
-    (d.services || []).map((x) => `${x.port}/${x.name}`).join(" "),
-    d.latency_ms, d.severity, d.assessment, [...new Set(d.findings.flatMap((f) => f.cve))].sort().join(" ")]);
+    services(d).map((x) => `${x.port}/${x.name}`).join(" "), d.latency_ms, d.severity, d.assessment, [...new Set(d.findings.flatMap((f) => f.cve))].sort().join(" ")]);
   const csv = "﻿" + [head, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -1024,277 +1030,411 @@ function downloadCsv(devices, name) {
   toast(`ดาวน์โหลด ${num(devices.length)} เครื่องแล้ว`);
 }
 
-/* ── view: report (print) ───────────────────────────────────────────── */
-async function viewReport([id], alive) {
-  const j = await api(`/api/scans/${id}`);
-  if (!alive()) return;
-  const c = { critical: 0, high: 0, low: 0, safe: 0 };
-  j.devices.forEach((d) => c[d.severity]++);
-  const act = j.devices.filter((d) => d.severity !== "safe");
-  const demo = !!j.demo_scenario;
-  const summary = !j.devices.length ? "ไม่พบเครื่องที่ออนไลน์ในช่วงที่ตรวจ"
-    : act.length ? `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ พบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง ในจำนวนนี้ ${num(c.critical)} เครื่องมีช่องโหว่ PHP2Shell ที่ต้องแก้ไขโดยด่วน และอีก ${num(c.high + c.low)} เครื่องมีความเสี่ยงที่ควรแก้ไข แนะนำให้อัปเดต PHP ของเครื่องกลุ่มแรกก่อน แล้วสั่งตรวจซ้ำเพื่อยืนยัน`
-      : `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ พบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง ไม่พบเครื่องที่มีความเสี่ยง PHP2Shell ณ เวลาที่ตรวจ`;
-  render(`<section class="page"><div class="wrap"><div class="report">
-    <div class="page-actions no-print" style="margin-bottom:32px">
-      <a class="btn btn-quiet" href="#/results/${esc(j.id)}">${icon("back")}กลับไปที่ผลการสแกน</a>
-      <button class="btn btn-primary" id="print">${icon("print")}พิมพ์ / บันทึก PDF</button>
-    </div>
-    ${demo ? '<p><span class="badge demo">ตัวอย่าง · ข้อมูลจำลอง — ไม่ใช่ผลการตรวจเครือข่ายจริง</span></p>' : ""}
-    <h1 style="margin-top:12px">รายงานผลการตรวจช่องโหว่ PHP2Shell</h1>
-    <p class="meta">ช่วงที่ตรวจ <span class="mono">${esc(j.target_label)}</span> · ${fmtDate(j.created_at)} · ใช้เวลา ${fmtDuration(j.duration_s)} · สถานะ ${STATE[j.state] || esc(j.state)}</p>
-    <div class="sum">
-      <div><span class="muted">ออนไลน์</span><b>${num(j.devices.length)}</b></div>
-      <div><span class="muted">ต้องแก้ด่วน</span><b style="color:var(--crit)">${num(c.critical)}</b></div>
-      <div><span class="muted">ควรแก้ไข</span><b style="color:var(--warn)">${num(c.high + c.low)}</b></div>
-      <div><span class="muted">คะแนน (คำนวณโดย thscan)</span><b>${num(j.security_score)} · ${esc(j.security_grade)}</b></div>
-    </div>
-    <h2>สรุป</h2><p>${summary}</p>
-    ${act.length ? `<h2>เครื่องที่ต้องดำเนินการ (เรียงตามความเร่งด่วน)</h2>
-      <table><thead><tr><th>เครื่อง</th><th>ระดับ</th><th>PHP</th><th>สิ่งที่ควรทำ</th></tr></thead><tbody>
-      ${act.map((d) => `<tr><td><span class="mono">${esc(d.ip)}</span><br><span class="muted">${esc(d.hostname || "")}</span></td>
-        <td>${sevBadge(d.severity)}</td><td class="mono">${esc(d.php_version || "—")}</td>
-        <td>${esc(todoFor(d)[0])}</td></tr>`).join("")}</tbody></table>` : ""}
-    ${j.devices.length ? `<h2>เครื่องทั้งหมดที่ตรวจพบ</h2>
-      <table><thead><tr><th>IP</th><th>ชื่อโฮสต์</th><th>ประเภท</th><th>PHP</th><th>พอร์ตที่เปิด</th><th>ผล</th></tr></thead><tbody>
-      ${j.devices.map((d) => `<tr><td class="mono">${esc(d.ip)}</td><td>${esc(d.hostname || "—")}</td><td>${esc(devType(d.device_type))}</td>
-        <td class="mono">${esc(d.php_version || "—")}</td>
-        <td class="mono">${esc(svcPorts(d).join(", ") || "—")}</td><td>${SEV[d.severity].label}</td></tr>`).join("")}</tbody></table>` : ""}
-    ${j.devices.some((d) => cautions(d).length) ? `<h2>พอร์ตที่ควรตรวจสอบ</h2>
-      <table><thead><tr><th>เครื่อง</th><th>พอร์ต</th><th>ข้อควรระวัง</th></tr></thead><tbody>
-      ${j.devices.flatMap((d) => cautions(d).map((x) => `<tr><td class="mono">${esc(d.ip)}</td><td>${x.port} · ${esc(x.name)}</td><td>${esc(x.note)}</td></tr>`)).join("")}</tbody></table>` : ""}
-    <h2>หมายเหตุ</h2>
-    <p class="muted">PHP รุ่นที่แก้ไขช่องโหว่แล้ว: 8.5.12, 8.4.27, 8.3.36, 8.2.35 ขึ้นไป · สาขาที่หมดอายุ (ต่ำกว่า 8.2) ควรย้ายไปรุ่นที่ยังได้รับการสนับสนุน ·
-      ผลนี้มาจากการตรวจแบบไม่ทำลายระบบ ณ เวลาที่ระบุ · คะแนนคำนวณโดย thscan ไม่ใช่การรับรองจาก ThaiCERT หรือหน่วยงานใด</p>
-  </div></div></section>`);
-  $("#print").addEventListener("click", () => print());
-}
-
-/* ── view: latest ───────────────────────────────────────────────────── */
 async function viewLatest(_, alive) {
   const jobs = await api("/api/scans");
   if (!alive()) return;
   if (jobs.length) { location.replace(`#/${["queued", "running"].includes(jobs[0].state) ? "scan" : "results"}/${jobs[0].id}`); return; }
-  render(`<section class="page"><div class="wrap"><div class="empty">
-    <h3>ยังไม่มีผลการสแกน</h3><p>เริ่มสแกนเครือข่ายครั้งแรก หรือเปิดตัวอย่างเพื่อดูว่าหน้าผลลัพธ์เป็นอย่างไร</p>
-    <p style="margin-top:24px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><a class="btn btn-primary" href="#/">เริ่มสแกน</a>
-    <button class="btn btn-secondary" id="demo2">ดูตัวอย่าง</button></p></div></div></section>`);
+  emptyPage("ยังไม่มีผลการสแกน", "เริ่มสแกนเครือข่ายครั้งแรก หรือเปิดตัวอย่างเพื่อดูว่าหน้าผลลัพธ์เป็นอย่างไร");
+}
+function emptyPage(title, text) {
+  render(`<div class="app thin"><div class="card in1" style="padding:36px;text-align:center"><h1 class="h1" style="font-size:24px">${title}</h1><p class="lead">${text}</p>
+    <p style="margin-top:18px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><a class="btn btn-g" href="#/">เริ่มสแกน</a><button type="button" class="btn" id="demo2">ดูตัวอย่าง</button></p></div></div>`);
   $("#demo2").addEventListener("click", openDemoPicker);
 }
 
-/* ── view: history ──────────────────────────────────────────────────── */
-function histRow(s) {
-  const live = ["queued", "running"].includes(s.state);
-  return `<a class="hist-row" href="#/${live ? "scan" : "results"}/${esc(s.id)}">
-    <span><span class="target">${esc(s.target_label || "—")}</span>
-      ${s.demo_scenario ? ' <span class="badge demo">ตัวอย่าง</span>' : ""}
-      ${s.state !== "completed" ? ` <span class="badge ${s.state === "failed" ? "crit" : "plain"}">${STATE[s.state] || esc(s.state)}</span>` : ""}
-      <br><span class="when">${fmtDate(s.created_at)}${s.note ? ` · ${esc(s.note)}` : ""}</span></span>
-    <span class="muted" style="font-size:var(--fs-sm)">ออนไลน์ ${num(s.online)} · <span style="color:${s.risks ? "var(--crit)" : "var(--ok)"}">ควรแก้ ${num(s.risks)}</span></span>
-    <span class="grade g-${esc(s.security_grade)}" title="คะแนน ${num(s.security_score)}/100">${esc(s.security_grade)}</span>
-    <span class="muted">${icon("arrow").replace("<svg", '<svg width="20" height="20"')}</span></a>`;
+/* ═══ view: report (print) ═════════════════════════════════════════════ */
+async function viewReportLatest(_, alive) {
+  const jobs = (await api("/api/scans")).filter((j) => !["queued", "running"].includes(j.state));
+  if (!alive()) return;
+  if (jobs.length) { location.replace(`#/report/${jobs[0].id}`); return; }
+  emptyPage("ยังไม่มีรายงาน", "รายงานจะสร้างจากผลการสแกนครั้งล่าสุด เริ่มสแกนก่อน หรือเปิดตัวอย่าง");
+}
+async function viewReport([id], alive) {
+  const j = await api(`/api/scans/${id}`);
+  if (!alive()) return;
+  const c = counts(j), act = j.devices.filter((d) => d.severity !== "safe").sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank), demo = !!j.demo_scenario;
+  const watch = j.devices.flatMap((d) => services(d).filter((x) => x.note).map((x) => ({ d, x })));
+  const pill = (sev) => `<span class="badge ${SEV[sev].cls}">${SEV[sev].word}</span>`;
+  const summary = !j.devices.length ? "ไม่พบเครื่องที่ออนไลน์ในช่วงที่ตรวจ"
+    : act.length ? `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ พบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง ${c.critical ? `<b style="color:var(--crit)">${num(c.critical)} เครื่องมีช่องโหว่ PHP2Shell ที่ต้องแก้ไขโดยด่วน</b> ` : ""}${c.high + c.low ? `และอีก ${num(c.high + c.low)} เครื่องควรปรับปรุง ` : ""}แนะนำให้แก้เครื่องที่ต้องแก้ด่วนก่อน แล้วสั่งตรวจซ้ำเพื่อยืนยัน`
+      : `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ พบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง ไม่พบเครื่องที่มีความเสี่ยง PHP2Shell ณ เวลาที่ตรวจ`;
+  render(`<div class="app" style="padding-top:0">
+    <div class="noprint in1" style="width:min(860px,100%);margin:8px auto 0;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px">
+      <a class="btn" href="#/results/${esc(j.id)}">${ic("back", 17)}กลับไปที่ผลการสแกน</a>
+      <button type="button" class="btn btn-g" id="print">${ic("print", 17)}พิมพ์ / บันทึก PDF</button></div>
+    <article class="sheet in2"><div class="sheet-strip" aria-hidden="true"></div><div class="sheet-body">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
+        <div style="min-width:0">${demo ? '<span class="badge b-blue" style="white-space:normal">ตัวอย่าง · ข้อมูลจำลอง — ไม่ใช่ผลการตรวจเครือข่ายจริง</span>' : ""}
+          <h1 style="margin-top:12px;font-size:28px;line-height:1.3">รายงานผลการตรวจช่องโหว่ PHP2Shell</h1>
+          <p class="muted" style="margin-top:6px;font-size:13.5px">ช่วงที่ตรวจ <span class="num">${esc(j.target_label)}</span> · ${esc(fmtDate(j.created_at))} · ${portsChecked(j)}ใช้เวลา ${fmtDuration(j.duration_s)} · ${STATE[j.state] || esc(j.state)}</p></div>
+        <div style="display:flex;align-items:center;gap:8px;flex:none"><span class="logo" style="width:34px;height:34px;border-radius:10px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:18px;height:18px"><path d="${P.shield}"/></svg></span><b>thscan</b></div></div>
+      <dl class="sum4">
+        <div style="background:var(--tint)"><dt style="color:var(--blue-ink)">เครื่องที่ออนไลน์</dt><dd style="color:var(--blue-ink)">${num(j.devices.length)}<span style="font-size:12.5px;font-weight:500"> / ${num(j.progress.total_ips)}</span></dd></div>
+        <div style="background:var(--crit-bg)"><dt style="color:var(--crit)">ต้องแก้ด่วน</dt><dd style="color:var(--crit)">${num(c.critical)}</dd></div>
+        <div style="background:var(--warn-bg)"><dt style="color:var(--warn)">ควรแก้ไข</dt><dd style="color:var(--warn)">${num(c.high + c.low)}</dd></div>
+        <div style="background:var(--bg)"><dt class="muted">คะแนน (คำนวณโดย thscan)</dt><dd>${num(j.security_score)}<span style="font-size:12.5px;font-weight:500" class="muted"> · เกรด ${esc(j.security_grade)}</span></dd></div></dl>
+      <h2>สรุปสำหรับผู้บริหาร</h2><p style="font-size:14.5px;line-height:1.8">${summary}</p>
+      ${act.length ? `<h2>เครื่องที่ต้องดำเนินการ (เรียงตามความเร่งด่วน)</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>ระดับ</th><th>PHP</th><th>สิ่งที่ควรทำ</th></tr></thead><tbody>
+        ${act.map((d) => `<tr><td><b class="num">${esc(d.ip)}</b><br><span class="muted">${esc(d.hostname || "")}</span></td><td>${pill(d.severity)}</td><td class="num">${esc(d.php_version || "—")}</td><td>${esc(todoFor(d)[0])}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${watch.length ? `<h2>พอร์ตที่ควรตรวจสอบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>พอร์ต</th><th>ข้อแนะนำ</th></tr></thead><tbody>
+        ${watch.map(({ d, x }) => `<tr><td class="num">${esc(d.ip)}</td><td><span class="badge b-warn">${x.port} · ${esc(x.name)}</span></td><td>${esc(x.note)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${j.devices.length ? `<h2>เครื่องทั้งหมดที่ตรวจพบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>IP</th><th>ชื่อโฮสต์</th><th>ประเภท</th><th>PHP</th><th>พอร์ตที่เปิด</th><th>ผล</th></tr></thead><tbody>
+        ${j.devices.map((d) => `<tr><td class="num">${esc(d.ip)}</td><td>${esc(d.hostname || "—")}</td><td>${esc(devType(d.device_type))}</td><td class="num">${esc(d.php_version || "—")}</td><td class="num">${esc(services(d).map((x) => x.port).join(", ") || "—")}</td><td>${pill(d.severity)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      <h2>อ่านรายงานนี้อย่างไร</h2>
+      <dl style="margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;font-size:13px;line-height:1.6">
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--crit-line)"><dt>${pill("critical")}</dt><dd style="margin:6px 0 0">ใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell ผู้ไม่หวังดีอาจสั่งงานเครื่องได้</dd></div>
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--warn-line)"><dt>${pill("low")}</dt><dd style="margin:6px 0 0">ความเสี่ยงรองลงมา หรือพอร์ตที่ควรจำกัดผู้เข้าถึง</dd></div>
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--ok-line)"><dt>${pill("safe")}</dt><dd style="margin:6px 0 0">ไม่พบช่องโหว่ PHP2Shell ณ เวลาที่ตรวจ</dd></div></dl>
+      <p class="muted" style="margin-top:18px;font-size:12.5px;line-height:1.75">PHP รุ่นที่แก้ไขแล้ว: 8.5.12, 8.4.27, 8.3.36, 8.2.35 ขึ้นไป · ผลมาจากการตรวจแบบไม่ทำลายระบบ ณ เวลาที่ระบุ · พอร์ตที่เปิดไม่ถือเป็นช่องโหว่ · คะแนนคำนวณโดย thscan ไม่ใช่การรับรองจาก ThaiCERT หรือหน่วยงานใด</p>
+      <div class="muted" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;margin-top:28px;padding-top:12px;border-top:1px solid var(--line);font-size:12px"><span>thscan v${esc(cfg.version)} · ติดตั้งและดูแลโดยหน่วยงาน</span><span>พิมพ์เมื่อ ${esc(fmtDate(new Date().toISOString(), { dateStyle: "medium" }))}</span></div>
+    </div></article></div>`);
+  $("#print").addEventListener("click", () => print());
 }
 
+/* ═══ view: history ════════════════════════════════════════════════════ */
+const H = { sel: null, flip: 0 };
 async function viewHistory(_, alive) {
   const jobs = await api("/api/scans");
   if (!alive()) return;
-  render(`<section class="page"><div class="wrap">
-    <div class="page-head"><div><p class="eyebrow">ประวัติ</p><h1>ผลการสแกนทั้งหมด</h1>
-      <p>เก็บไว้ในเครื่องที่ติดตั้ง thscan (โฟลเดอร์ data/) ยังอยู่แม้รีสตาร์ทโปรแกรม</p></div>
-      ${jobs.length ? `<div class="page-actions"><button class="btn btn-danger" id="clear">${icon("trash")}ล้างประวัติ</button></div>` : ""}</div>
-    ${jobs.length ? `<div class="hist">${jobs.map(histRow).join("")}</div>`
-      : `<div class="empty" style="border:1px solid var(--line);border-radius:var(--r-lg)"><h3>ยังไม่มีประวัติการสแกน</h3>
-        <p>ผลการสแกนทุกครั้ง (รวมถึงที่ตั้งเวลาไว้) จะแสดงที่นี่</p><p style="margin-top:24px"><a class="btn btn-primary" href="#/">เริ่มสแกน</a></p></div>`}
-  </div></section>`);
-  const clear = $("#clear");
-  clear && clear.addEventListener("click", async () => {
-    const ok = await confirmModal({ title: "ล้างประวัติทั้งหมด?", text: `ผลการสแกน ${num(jobs.length)} รายการจะถูกลบถาวร รวมถึงไฟล์ผลลัพธ์ใน data/results (บันทึกการใช้งานยังคงอยู่)`, ok: "ลบทั้งหมด", danger: true });
-    if (!ok) return;
-    try { const r = await api("/api/scans", { method: "DELETE" }); toast(`ลบแล้ว ${num(r.removed)} รายการ`); route(); } catch (err) { toast(err.message); }
+  if (!jobs.length) { emptyPage("ยังไม่มีประวัติการสแกน", "ผลการสแกนทุกครั้ง (รวมที่ตั้งเวลาไว้) จะแสดงที่นี่ และยังอยู่แม้รีสตาร์ทโปรแกรม"); return; }
+  const targets = [...new Set(jobs.map((j) => j.target_label))];
+  if (!targets.includes(H.sel)) H.sel = targets[0];
+  render(`<div class="app slim">
+    <div class="page-head in1">
+      <div><h1 class="h1">ประวัติการสแกน</h1><p class="lead">เก็บในเครื่องที่ติดตั้ง (โฟลเดอร์ data/) ยังอยู่แม้รีสตาร์ทโปรแกรม</p></div>
+      ${dock("d-htarget", `<button type="button" class="peek flat" style="width:auto;min-width:240px;max-width:min(360px,100%)"><span class="muted" style="font-size:12.5px">เป้าหมาย</span><span id="h-sel" class="num" style="min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>${chev}</button>`, `<div class="stag" id="h-targets"></div>`, { w: 340, align: "end" })}
+    </div>
+    <section class="card sec in2" aria-labelledby="h-trend" style="margin-top:18px;padding:20px 22px" id="h-chart"></section>
+    <section class="card in3" aria-labelledby="h-all" style="margin-top:16px;padding:14px 10px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:0 8px">
+        <h2 id="h-all" style="font-size:15px">ทุกครั้ง (${num(jobs.length)}) <span class="muted" style="font-size:12.5px;font-weight:500">· ชี้ที่แถวเพื่อดูรายละเอียด</span></h2>
+        <span id="h-clear"></span></div>
+      <div style="margin-top:6px;display:flex;flex-direction:column">${jobs.map((s) => {
+        const fix = s.risks, live = ["queued", "running"].includes(s.state);
+        return `<a class="hrow" href="#/${live ? "scan" : "results"}/${esc(s.id)}">
+          <span class="badge ${live ? "b-blue" : gradeCls(s.security_grade)}" style="min-width:76px;justify-content:center;font-size:13px;padding:8px 10px">${live ? "กำลังสแกน" : `เกรด ${esc(s.security_grade)}`}</span>
+          <span style="flex:1;min-width:0"><span style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:15px;font-weight:700;overflow-wrap:anywhere" class="num">${esc(s.target_label || "—")}${s.demo_scenario ? '<span class="badge b-blue">ตัวอย่าง</span>' : ""}${s.state === "cancelled" || s.state === "failed" ? `<span class="badge b-warn">${STATE[s.state]}</span>` : ""}</span>
+            <span class="muted" style="display:block;font-size:12.5px">${esc(fmtDate(s.created_at))}${s.note ? ` · ${esc(s.note)}` : ""}</span></span>
+          <span class="more"><span class="badge b-blue">ออนไลน์ ${num(s.online)}</span><span class="badge ${s.severity_counts.critical ? "b-bad" : fix ? "b-warn" : "b-ok"}">${fix ? `ควรแก้ ${num(fix)}` : "ไม่มีที่ต้องแก้"}</span><span class="badge b-grey">${num(s.security_score)}/100</span></span>
+          <span class="arrow" aria-hidden="true">→</span></a>`;
+      }).join("")}</div>
+    </section></div>`);
+  const paint = () => {
+    const mine = jobs.filter((j) => j.target_label === H.sel && !["queued", "running"].includes(j.state)).reverse();
+    $("#h-sel").textContent = H.sel;
+    $("#h-targets").innerHTML = targets.map((t) => { const rs = jobs.filter((j) => j.target_label === t); return `<button type="button" class="mi" data-t="${esc(t)}" aria-pressed="${t === H.sel}"><span style="flex:1;min-width:0"><span class="ot num" style="overflow-wrap:anywhere">${esc(t)}</span><span class="od">${rs[0].demo_scenario ? "ตัวอย่าง · " : "ล่าสุด "}${esc(fmtDate(rs[0].created_at))}</span></span><span class="n">${rs.length}</span></button>`; }).join("");
+    const X = (i) => (mine.length === 1 ? 420 : 40 + (760 * i) / (mine.length - 1)), Y = (v) => 200 - (170 * v) / 100;
+    let line = "", pts = "";
+    mine.forEach((r, i) => { line += `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(r.security_score).toFixed(1)}`; pts += `M${(X(i) - 6).toFixed(1)} ${Y(r.security_score).toFixed(1)}a6 6 0 1 0 12 0a6 6 0 1 0 -12 0`; });
+    const area = mine.length > 1 ? `${line}L${X(mine.length - 1).toFixed(1)} 200L${X(0).toFixed(1)} 200Z` : "M0 0";
+    const last = mine[mine.length - 1], prev = mine[mine.length - 2], d = last && prev ? last.security_score - prev.security_score : null;
+    $("#h-chart").innerHTML = last ? `<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:12px">
+        <div style="min-width:0"><h2 id="h-trend" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--muted)">คะแนนล่าสุด · <span class="num" style="overflow-wrap:anywhere">${esc(H.sel)}</span> ${tip("คำนวณโดย thscan: 100 หักเครื่องละ ด่วน 22 · สูง 14 · ต่ำ 4 · เส้นที่ไต่ขึ้นแปลว่าปลอดภัยขึ้น")}</h2>
+          <div class="gtext num" style="font-size:44px;font-weight:700;line-height:1.1"><span id="h-score">0</span><span style="font-size:16px">/100</span></div></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end">
+          <span class="badge ${d === null ? "b-grey" : d >= 0 ? "b-ok" : "b-bad"}" style="font-size:13px;padding:6px 12px">${d === null ? "สแกนครั้งเดียว ยังไม่มีแนวโน้ม" : d > 0 ? `▲ ดีขึ้น +${d}` : d < 0 ? `▼ แย่ลง ${d}` : "เท่าเดิม"}</span>
+          <span class="badge ${gradeCls(last.security_grade)}" style="font-size:13px;padding:6px 12px">เกรด ${esc(last.security_grade)}</span>
+          <span class="badge b-bad" style="font-size:13px;padding:6px 12px">ด่วน ${num(last.severity_counts.critical)}</span>
+          <span class="badge b-warn" style="font-size:13px;padding:6px 12px">ควรแก้ ${num(last.severity_counts.high + last.severity_counts.low)}</span></div></div>
+      <svg viewBox="0 0 840 220" role="img" aria-label="คะแนนของ ${esc(H.sel)}: ${mine.map((r) => r.security_score).join(" → ")}" style="display:block;width:100%;height:auto;margin-top:14px;overflow:visible">
+        <defs><linearGradient id="hl" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="800" y2="0"><stop offset="0" stop-color="#2F5BEA"/><stop offset="1" stop-color="#6D4AFF"/></linearGradient>
+        <linearGradient id="ha" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6D4AFF" stop-opacity=".2"/><stop offset="1" stop-color="#2F5BEA" stop-opacity="0"/></linearGradient></defs>
+        <path d="M20 30H820M20 87H820M20 143H820" stroke="#EDF0F8"/><path d="M20 200H820" stroke="#D5DDF3" stroke-width="1.2"/>
+        <path d="${area}" fill="url(#ha)" class="swap${H.flip}"/><path class="draw${H.flip}" d="${line}" pathLength="100" fill="none" stroke="url(#hl)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="${pts}" fill="#fff" stroke="#4A4FF0" stroke-width="2.5" class="swap${H.flip}"/></svg>
+      <div class="muted" style="display:flex;justify-content:space-between;padding:0 4px;font-size:12px"><span>${esc(fmtDate(mine[0].created_at, { dateStyle: "medium" }))}</span><span>${mine.length > 1 ? esc(fmtDate(last.created_at, { dateStyle: "medium" })) : ""}</span></div>`
+      : `<p class="muted">เป้าหมายนี้ยังไม่มีผลที่สแกนเสร็จ</p>`;
+    tween($("#h-score"), last ? last.security_score : 0, 900);
+  };
+  const clearUi = (confirming) => {
+    $("#h-clear").innerHTML = confirming
+      ? `<span style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;animation:rise .35s var(--ease) backwards"><span style="font-size:13px;font-weight:600;color:var(--crit)">ลบ ${num(jobs.length)} รายการถาวร?</span><button type="button" class="btn" id="c-no">ยกเลิก</button><button type="button" class="btn btn-danger" id="c-yes">ลบทั้งหมด</button></span>`
+      : `<button type="button" class="ghost stop" id="c-ask">${ic("trash", 16)}ล้างประวัติ</button>`;
+    const f = $(confirming ? "#c-no" : "#c-ask"); if (confirming && f) f.focus();
+  };
+  $("#h-targets").addEventListener("click", (e) => { const b = e.target.closest("[data-t]"); if (b && b.dataset.t !== H.sel) { H.sel = b.dataset.t; H.flip = 1 - H.flip; shut($("#d-htarget")); paint(); } });
+  $("#h-clear").addEventListener("click", async (e) => {
+    if (e.target.closest("#c-ask")) clearUi(true);
+    else if (e.target.closest("#c-no")) clearUi(false);
+    else if (e.target.closest("#c-yes")) {
+      try { const r = await api("/api/scans", { method: "DELETE" }); toast(`ลบแล้ว ${num(r.removed)} รายการ`); route(); } catch (err) { toast(err.message); }
+    }
   });
+  clearUi(false); paint();
 }
 
-/* ── view: settings ─────────────────────────────────────────────────── */
+/* ═══ view: settings (schedules, scope, audit, about) ═════════════════ */
 const AUDIT = {
-  scan_started: "เริ่มสแกน", scan_finished: "สแกนเสร็จ", scan_cancelled: "ยกเลิกการสแกน", history_cleared: "ล้างประวัติ",
-  device_rechecked: "ตรวจซ้ำเครื่อง", device_patch_simulated: "จำลองการแก้ไข (ตัวอย่าง)", schedule_created: "สร้างตารางเวลา",
-  schedule_deleted: "ลบตารางเวลา", schedule_fired: "ตารางเวลาเริ่มสแกน", export_csv: "ส่งออก CSV", export_json: "ส่งออก JSON",
+  scan_started: ["เริ่มสแกน", "b-blue"], scan_finished: ["สแกนเสร็จ", "b-ok"], scan_cancelled: ["ยกเลิกการสแกน", "b-warn"], history_cleared: ["ล้างประวัติ", "b-warn"],
+  device_rechecked: ["ตรวจซ้ำเครื่อง", "b-ok"], device_patch_simulated: ["จำลองการแก้ไข", "b-grey"], schedule_created: ["สร้างตารางเวลา", "b-blue"],
+  schedule_updated: ["แก้ไขตารางเวลา", "b-blue"], schedule_deleted: ["ลบตารางเวลา", "b-warn"], schedule_fired: ["ตารางเวลาทำงาน", "b-blue"],
+  export_csv: ["ส่งออก CSV", "b-grey"], export_json: ["ส่งออก JSON", "b-grey"],
 };
 function auditDetail(e) {
   const p = [];
-  if (e.targets && e.targets.length) p.push(`<span class="mono">${esc(e.targets.join(", "))}</span>`);
-  if (e.demo_scenario) p.push(`ตัวอย่าง: ${esc(e.demo_scenario)}`);
-  if (e.name) p.push(esc(e.name));
-  if (e.cron) p.push(`<span class="mono">${esc(e.cron)}</span>`);
-  if (e.ip) p.push(`<span class="mono">${esc(e.ip)}</span>`);
-  if (e.severity_before && e.severity_after) p.push(`${SEV[e.severity_before] ? SEV[e.severity_before].label : esc(e.severity_before)} → ${SEV[e.severity_after] ? SEV[e.severity_after].label : esc(e.severity_after)}`);
-  if (e.event === "scan_finished") p.push(`${STATE[e.state] || esc(e.state)} · ออนไลน์ ${num(e.online)} · ควรแก้ ${num(e.risks)}`);
+  if (e.targets && e.targets.length) p.push(e.targets.join(", "));
+  if (e.sites && e.sites.length) p.push(e.sites.join(", "));
+  if (e.demo_scenario) p.push(`ตัวอย่าง: ${e.demo_scenario}`);
+  if (e.name) p.push(e.name);
+  if (e.ip) p.push(e.ip);
+  if (e.severity_before && e.severity_after && SEV[e.severity_before] && SEV[e.severity_after]) p.push(`${SEV[e.severity_before].word} → ${SEV[e.severity_after].word}`);
+  if (e.event === "scan_finished") p.push(`ออนไลน์ ${num(e.online)} · ควรแก้ ${num(e.risks)}`);
   if (e.removed_jobs != null) p.push(`${num(e.removed_jobs)} รายการ`);
-  if (e.job_id) p.push(`<a href="#/results/${esc(e.job_id)}" class="mono">${esc(e.job_id)}</a>`);
-  return p.join(" · ") || "—";
+  return esc(p.join(" · ") || "—");
 }
-function describeCron(cron) {
-  const f = cron.trim().split(/\s+/);
-  if (f.length !== 5) return cron;
-  const [m, h, dom, mon, dow] = f, at = () => `${h.padStart(2, "0")}:${m.padStart(2, "0")} น.`;
-  const num1 = (x) => /^\d+$/.test(x);
-  if (num1(m) && h === "*" && dom === "*" && mon === "*" && dow === "*") return `ทุกชั่วโมง นาทีที่ ${m}`;
-  if (!num1(m) || !num1(h) || mon !== "*") return "ตามรูปแบบที่กำหนดเอง";
-  if (dom === "*" && dow === "*") return `ทุกวัน เวลา ${at()}`;
-  if (dom === "*" && dow === "1-5") return `ทุกวันจันทร์–ศุกร์ เวลา ${at()}`;
-  if (dom === "*" && num1(dow) && +dow <= 6) return `ทุกวัน${DOW[+dow]} เวลา ${at()}`;
-  if (num1(dom) && dow === "*") return `ทุกวันที่ ${dom} ของเดือน เวลา ${at()}`;
-  return "ตามรูปแบบที่กำหนดเอง";
+/* "now" as wall-clock parts in the server's time zone, held in a UTC Date */
+function tzNow() {
+  const parts = {};
+  try { new Intl.DateTimeFormat("en-GB", { timeZone: cfg.timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date()).forEach((p) => { parts[p.type] = p.value; }); }
+  catch { const d = new Date(); return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes())); }
+  return new Date(Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute));
 }
-const S = { freq: "daily", time: "02:00", dow: "1", dom: "1", cron: "0 2 * * *" };
-function formCron() {
-  const [h, m] = (S.time || "02:00").split(":").map((x) => String(+x));
-  return { daily: `${m} ${h} * * *`, weekdays: `${m} ${h} * * 1-5`, weekly: `${m} ${h} * * ${S.dow}`,
-    monthly: `${m} ${h} ${S.dom} * *`, hourly: `${m} * * * *`, custom: S.cron.trim() }[S.freq];
+function parseCron(c) {
+  const f = String(c).trim().split(/\s+/), base = { freq: "custom", slot: 4, dow: 1, dom: "1", cron: c };
+  if (f.length !== 5) return base;
+  const [m, h, dom, mon, dow] = f;
+  if (!/^(0|30)$/.test(m) || !/^\d{1,2}$/.test(h) || +h > 23 || mon !== "*") return base;
+  const slot = +h * 2 + (m === "30" ? 1 : 0);
+  if (dom === "*" && dow === "*") return { ...base, freq: "daily", slot };
+  if (dom === "*" && dow === "1-5") return { ...base, freq: "weekdays", slot };
+  if (dom === "*" && /^[0-6]$/.test(dow)) return { ...base, freq: "weekly", slot, dow: +dow };
+  if (/^\d{1,2}$/.test(dom) && +dom >= 1 && +dom <= 28 && dow === "*") return { ...base, freq: "monthly", slot, dom };
+  return base;
+}
+const Z = { items: [], cur: "new", form: null, tab: "scope", tswap: 0, audit: [] };
+function blankForm() { return { name: "", targets: (S.detected.find((d) => d.ok) || {}).cidr || (cfg.allowed_cidrs || [""])[0], freq: "daily", slot: 4, dow: 1, dom: "1", cron: "0 2 * * *", profile: "common", custom: "" }; }
+function formCron(f) {
+  const h = Math.floor(f.slot / 2), m = f.slot % 2 ? 30 : 0;
+  return { daily: `${m} ${h} * * *`, weekdays: `${m} ${h} * * 1-5`, weekly: `${m} ${h} * * ${f.dow}`, monthly: `${m} ${h} ${f.dom || 1} * *`, custom: f.cron.trim() }[f.freq];
+}
+const freqWord = (f) => ({ daily: "ทุกวัน", weekdays: "จันทร์–ศุกร์", weekly: `ทุกวัน${DOW[f.dow]}`, monthly: `ทุกวันที่ ${f.dom || 1} ของเดือน`, custom: "ตามรูปแบบ cron" })[f.freq];
+const slotTime = (slot) => `${String(Math.floor(slot / 2)).padStart(2, "0")}:${slot % 2 ? "30" : "00"}`;
+function nextRunText(f) {
+  if (f.freq === "custom") return "ระบบคำนวณให้หลังบันทึก";
+  const now = tzNow(), hh = Math.floor(f.slot / 2), mm = f.slot % 2 ? 30 : 0;
+  for (let k = 1; k < 48 * 40; k += 1) {
+    const d = new Date(now.getTime() - (now.getUTCMinutes() % 30) * 60000 + k * 30 * 60000);
+    if (d.getUTCHours() !== hh || d.getUTCMinutes() !== mm) continue;
+    const wd = d.getUTCDay();
+    if (f.freq === "daily" || (f.freq === "weekdays" && wd >= 1 && wd <= 5) || (f.freq === "weekly" && wd === +f.dow) || (f.freq === "monthly" && d.getUTCDate() === +(f.dom || 1)))
+      return `${DS[wd]}. ${d.toLocaleDateString("th-TH", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" })} ${slotTime(f.slot)} น.`;
+  }
+  return "—";
 }
 
 async function viewSettings(_, alive) {
-  const [scheds, audit, auto] = await Promise.all([api("/api/schedules"), api("/api/audit"), api("/api/autodetect").catch(() => ({ subnets: [] }))]);
+  const [items, audit, auto] = await Promise.all([api("/api/schedules"), api("/api/audit"), api("/api/autodetect").catch(() => ({ subnets: [] }))]);
   if (!alive()) return;
-  const suggest = (auto.subnets || []).map((s) => s.cidr).find((c) => { const b = cidrBounds(c); return b && inScope(b.net, b.bcast); }) || "";
-  const box = (rows) => `<div class="box">${rows.map(([t, d, side]) => `<div class="box-row"><div><div class="t">${t}</div>${d ? `<div class="d">${d}</div>` : ""}</div>${side || ""}</div>`).join("")}</div>`;
-  render(`<section class="page"><div class="wrap">
-    <div class="page-head"><div><p class="eyebrow">ตั้งค่าและเครื่องมือ</p><h1>ตั้งเวลา ขอบเขต และบันทึกการใช้งาน</h1></div></div>
-    <div class="settings">
-      <nav class="subnav" aria-label="หัวข้อในหน้านี้">
-        <a href="#/settings" data-jump="set-sched">ตั้งเวลาสแกนอัตโนมัติ</a>
-        <a href="#/settings" data-jump="set-scope">ขอบเขตการสแกน</a>
-        <a href="#/settings" data-jump="set-audit">บันทึกการใช้งาน</a>
-        <a href="#/settings" data-jump="set-about">เกี่ยวกับ thscan</a>
-      </nav>
-      <div>
-        <section class="set-section" id="set-sched">
-          <h2>ตั้งเวลาสแกนอัตโนมัติ</h2>
-          <p>ให้ thscan สแกนเองตามเวลาที่กำหนด (เวลาประเทศไทย) ผลจะไปอยู่ในหน้าประวัติ โปรแกรมต้องเปิดทำงานอยู่ ณ เวลานั้น</p>
-          <div id="sched-list">${schedList(scheds)}</div>
-          <form class="box" id="sched-form" novalidate>
-            <div class="form-grid">
-              <label>ชื่อ<input class="input" name="name" required maxlength="80" placeholder="เช่น สแกนวงสำนักงานทุกคืน"></label>
-              <label><span>เป้าหมาย ${tip("ซับเน็ต ช่วง หรือ IP เดียว คั่นหลายรายการด้วยจุลภาค ต้องอยู่ในขอบเขตที่อนุญาต")}</span>
-                <input class="input mono" name="targets" required spellcheck="false" autocomplete="off" value="${esc(suggest)}" placeholder="เช่น 192.168.1.0/24"></label>
-              <label>ความถี่<select class="select" name="freq">
-                <option value="daily">ทุกวัน</option><option value="weekdays">ทุกวันทำการ (จ.–ศ.)</option><option value="weekly">ทุกสัปดาห์</option>
-                <option value="monthly">ทุกเดือน</option><option value="hourly">ทุกชั่วโมง</option><option value="custom">กำหนดเอง (cron)</option></select></label>
-              <label data-f="time">เวลา<input class="input" type="time" name="time" value="02:00" required></label>
-              <label data-f="dow" hidden>วัน<select class="select" name="dow">${DOW.map((d, i) => `<option value="${i}" ${i === 1 ? "selected" : ""}>วัน${d}</option>`).join("")}</select></label>
-              <label data-f="dom" hidden>วันที่<select class="select" name="dom">${Array.from({ length: 28 }, (_, i) => `<option>${i + 1}</option>`).join("")}</select></label>
-              <label data-f="cron" hidden><span>รูปแบบ cron ${tip("5 ช่อง: นาที ชั่วโมง วันที่ เดือน วันในสัปดาห์ (0 = อาทิตย์) เช่น 30 1 * * 1-5 = 01:30 น. วันจันทร์–ศุกร์")}</span>
-                <input class="input mono" name="cron" value="0 2 * * *" spellcheck="false" autocomplete="off"></label>
-              <div class="full">${portPicker("spp", "common", "")}</div>
-              <p class="full muted" id="sched-preview" style="font-size:var(--fs-sm)"></p>
-              <p class="full form-error" id="sched-err" role="alert" style="text-align:left" hidden></p>
-              <div class="full"><button class="btn btn-primary" type="submit">บันทึกตารางเวลา</button></div>
-            </div>
-          </form>
-        </section>
-
-        <section class="set-section" id="set-scope">
-          <h2>ขอบเขตการสแกน</h2>
-          <p>กำหนดโดยผู้ติดตั้งในไฟล์ <span class="mono">docker-compose.yml</span> (<span class="mono">THSCAN_ALLOWED_CIDRS</span>) แล้วเริ่มโปรแกรมใหม่ — ตั้งใจให้แก้จากหน้านี้ไม่ได้ เพื่อไม่ให้ผู้ใช้ขยายขอบเขตเอง</p>
-          ${box([
-            ...(cfg.allowed_cidrs || []).map((c) => { const b = cidrBounds(c); return [`<span class="mono">${esc(c)}</span>`, b ? `${intToIp(b.net)} – ${intToIp(b.bcast)} · ${num(b.bcast - b.net + 1)} ที่อยู่` : ""]; }),
-            ["จำนวนที่อยู่สูงสุดต่อการสแกน", `${num(cfg.max_targets)} ที่อยู่ (THSCAN_MAX_TARGETS)`],
-            ["งานพร้อมกันสูงสุด", `${num(cfg.max_concurrency)} การเชื่อมต่อ (THSCAN_MAX_CONCURRENCY)`],
-            ["พอร์ตเว็บที่ตรวจ PHP", `<span class="mono">${esc((cfg.web_ports || []).join(", "))}</span>`],
-            ["พอร์ตที่ใช้ตรวจว่าเครื่องออนไลน์", `<span class="mono">${esc((cfg.liveness_ports || []).join(", "))}</span>`],
-          ])}
-        </section>
-
-        <section class="set-section" id="set-audit">
-          <div class="page-head" style="margin-bottom:0"><div><h2>บันทึกการใช้งาน</h2>
-            <p style="color:var(--ink-2);margin-top:8px">ทุกการสแกน การตรวจซ้ำ การส่งออก และการตั้งเวลา ถูกบันทึกไว้ที่ <span class="mono">data/audit.log</span></p></div>
-            <button class="btn btn-secondary" id="audit-refresh">${icon("refresh")}รีเฟรช</button></div>
-          <div class="box scroll-x" id="audit-box">${auditTable(audit.entries)}</div>
-        </section>
-
-        <section class="set-section" id="set-about">
-          <h2>เกี่ยวกับ thscan</h2>
-          ${box([
-            ["เวอร์ชัน", `v${esc(cfg.version)}`],
-            ["สัญญาอนุญาต", "โอเพนซอร์ส ใช้ฟรี ไม่มีรุ่นเสียเงิน"],
-            ["ข้อมูลอยู่ที่ไหน", "ทุกอย่างเก็บในเครื่องที่ติดตั้ง (โฟลเดอร์ data/) ไม่ส่งออกนอกหน่วยงาน"],
-            ["ตรวจอะไร", "PHP2Shell (CVE-2026-109618, CVE-2026-109619), PHP สาขาที่หมดอายุ, การเปิดเผยเวอร์ชัน และ HSTS"],
-          ])}
-        </section>
-      </div>
+  if (!S.detected.length) S.detected = detect(auto.subnets);
+  Z.items = items; Z.audit = audit.entries || [];
+  if (Z.cur !== "new" && !Z.items.some((x) => x.id === Z.cur)) Z.cur = "new";
+  if (Z.cur === "new" && Z.items[0] && !Z.form) Z.cur = Z.items[0].id;
+  loadForm();
+  render(`<div class="app narrow">
+    <div class="page-head in1">
+      <div><h1 class="h1">ตั้งเวลาสแกนอัตโนมัติ</h1><p class="lead">เวลาตาม ${esc(cfg.timezone || "Asia/Bangkok")} · โปรแกรมต้องเปิดอยู่ ณ เวลานั้น · ผลไปอยู่ที่หน้าประวัติ</p></div>
+      ${dock("d-list", `<button type="button" class="peek" style="width:auto;min-width:260px;max-width:min(360px,100%);min-height:50px"><span style="min-width:0"><span class="k" id="l-k"></span><span class="v" id="l-v"></span></span>${chev}</button>`, `<div class="stag" id="l-list"></div>`, { w: 360, align: "end" })}
     </div>
-  </div></section>`);
+    <div class="tools in2" style="margin-top:20px">
+      ${dock("d-who", `<button type="button" class="peek"><span class="ic">1</span><span style="min-width:0"><span class="k">ชื่อและเป้าหมาย</span><span class="v" id="sum-who"></span></span>${chev}</button>`, `<div class="stag">
+        <label style="display:block"><span class="lbl">ชื่อตารางเวลา</span><input class="inp" id="f-name" placeholder="เช่น สแกนวงสำนักงานทุกคืน" autocomplete="off" maxlength="80"></label>
+        <label style="display:block;margin-top:10px"><span class="lbl">เป้าหมาย ${tip("ซับเน็ต ช่วง หรือ IP เดียว คั่นหลายรายการด้วยจุลภาค ต้องอยู่ในขอบเขตที่ผู้ติดตั้งอนุญาต")}</span><input class="inp num" id="f-targets" autocomplete="off" spellcheck="false"></label></div>`, { w: 420 })}
+      ${dock("d-freq", `<button type="button" class="peek"><span class="ic">2</span><span style="min-width:0"><span class="k">ความถี่</span><span class="v" id="sum-freq"></span></span>${chev}</button>`, `<div id="p-freq"></div>`, { w: 360, align: "mid" })}
+      ${dock("d-sports", `<button type="button" class="peek"><span class="ic">3</span><span style="min-width:0"><span class="k">พอร์ตที่ตรวจ</span><span class="v" id="sum-sports"></span></span>${chev}</button>`, `<div id="p-sports"></div>`, { w: 360, align: "end" })}
+    </div>
+    <section class="card stage in3" aria-label="เวลา" style="margin-top:16px;padding:16px 24px 24px;text-align:center">
+      <div id="dial-wrap" style="position:relative;max-width:380px;margin:0 auto;transition:opacity .4s">
+        <svg class="vis" viewBox="0 0 400 440" role="img" id="dial" aria-label="นาฬิกา 24 ชั่วโมง">
+          <defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2F5BEA"/><stop offset="1" stop-color="#6D4AFF"/></linearGradient>
+          <radialGradient id="cglow"><stop offset="0%" stop-color="#8B7CFF" stop-opacity=".3"/><stop offset="100%" stop-color="#4F7BFF" stop-opacity="0"/></radialGradient></defs>
+          <circle class="halo" cx="200" cy="168" r="150" fill="url(#cglow)"/><circle cx="200" cy="168" r="112" fill="#fff" stroke="url(#cg)" stroke-width="3"/>
+          <path id="night" fill="none" stroke="#C5CFEE" stroke-width="10" stroke-linecap="round" opacity=".7"/>
+          <path id="ticks" fill="none" stroke="#8A93C2" stroke-width="1.4" stroke-linecap="round"/><path id="majors" fill="none" stroke="#2F5BEA" stroke-width="2.6" stroke-linecap="round"/>
+          <g fill="#4B5575" font-size="13" font-weight="600" text-anchor="middle" font-family="Inter, sans-serif"><text x="200" y="64">0</text><text x="322" y="173">6</text><text x="200" y="283">12</text><text x="78" y="173">18</text></g>
+          <g class="hand" id="hand"><path d="M200 168V92" stroke="#4A4FF0" stroke-width="5" stroke-linecap="round"/><circle cx="200" cy="88" r="7" fill="#6D4AFF"/></g>
+          <circle cx="200" cy="168" r="8" fill="#fff" stroke="#4A4FF0" stroke-width="3"/>
+          <path d="M39 300 C42 372 111 407 200 407 C289 407 358 372 361 300" fill="none" stroke="#E1E6F5" stroke-width="6" stroke-linecap="round"/>
+          <path id="dial-ring" d="M39 300 C42 372 111 407 200 407 C289 407 358 372 361 300" pathLength="100" fill="none" stroke="url(#cg)" stroke-width="6" stroke-linecap="round" style="transition:stroke-dasharray .6s cubic-bezier(.34,1.3,.64,1)"/>
+          <g class="mark" id="dial-mark"><circle r="13" fill="#fff" stroke="url(#cg)" stroke-width="3"/><circle r="4" fill="#4A4FF0"/></g>
+        </svg>
+        <input class="ringin" id="slot" type="range" min="0" max="47" step="1" aria-label="เวลา ลากเพื่อเปลี่ยนทีละ 30 นาที">
+      </div>
+      <div class="dial-ctl">
+        <button type="button" class="round hov" id="earlier" aria-label="เร็วขึ้น 30 นาที">−</button>
+        <div><div class="k" id="when"></div><div class="gtext num" id="time" style="font-size:40px;font-weight:700;line-height:1.1"></div></div>
+        <button type="button" class="round hov" id="later" aria-label="ช้าลง 30 นาที">+</button></div>
+      <p class="hov muted" style="margin-top:4px;font-size:12.5px">ลากวงแหวน หรือกด − / + เลื่อนทีละ 30 นาที · แถบจางบนหน้าปัดคือช่วงกลางคืน 22:00–06:00</p>
+      <p class="summary" id="summary" aria-live="polite"></p>
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;margin-top:14px">
+        <button type="button" class="go" id="save" style="min-height:54px;font-size:16px"></button>
+        <button type="button" class="ghost stop" id="del" hidden>${ic("trash", 16)}ลบตารางเวลานี้</button></div>
+    </section>
+    <section class="card in4" aria-label="ข้อมูลระบบ" style="margin-top:16px;padding:6px 20px 20px">
+      <div class="tabs" role="tablist" style="--n:3" id="z-tabs">
+        ${[["scope", "ขอบเขตการสแกน"], ["audit", "บันทึกการใช้งาน"], ["about", "เกี่ยวกับ thscan"]].map(([id, l]) => `<button type="button" class="tab" role="tab" data-ztab="${id}">${l}</button>`).join("")}
+        <span class="tabbar" id="z-bar" aria-hidden="true"></span></div>
+      <div class="tabpanel" role="tabpanel" id="z-panel" style="min-height:190px"></div>
+    </section></div>`);
+  // static dial: hour ticks and the night arc
+  const C = (h, r) => { const a = (h / 24) * 2 * Math.PI - Math.PI / 2; return [200 + r * Math.cos(a), 168 + r * Math.sin(a)]; };
+  let minor = "", major = "";
+  for (let h = 0; h < 24; h += 1) { const [x1, y1] = C(h, h % 6 === 0 ? 90 : 98), [x2, y2] = C(h, 104); const seg = `M${x1.toFixed(1)} ${y1.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}`; if (h % 6 === 0) major += seg; else minor += seg; }
+  $("#ticks").setAttribute("d", minor); $("#majors").setAttribute("d", major);
+  const [nx1, ny1] = C(22, 82), [nx2, ny2] = C(30, 82);
+  $("#night").setAttribute("d", `M${nx1.toFixed(1)} ${ny1.toFixed(1)}A82 82 0 0 1 ${nx2.toFixed(1)} ${ny2.toFixed(1)}`);
 
-  $$("[data-jump]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); $(`#${a.dataset.jump}`).scrollIntoView({ behavior: "smooth" }); }));
-  $("#audit-refresh").addEventListener("click", async () => {
-    try { $("#audit-box").innerHTML = auditTable((await api("/api/audit")).entries); toast("อัปเดตแล้ว"); } catch (err) { toast(err.message); }
+  fillForm(); paintSchedule(); paintZTab();
+  $("#l-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-sid]");
+    if (!b) return;
+    Z.cur = b.dataset.sid; loadForm(); shut($("#d-list")); fillForm(); paintSchedule();
+    if (Z.cur === "new") $("#f-name").focus();
   });
-  wireSchedules();
+  $("#f-name").addEventListener("input", (e) => { Z.form.name = e.target.value; paintSchedule(); });
+  $("#f-targets").addEventListener("input", (e) => { Z.form.targets = e.target.value; paintSchedule(); });
+  $("#p-freq").addEventListener("click", (e) => {
+    const f = e.target.closest("[data-freq]"), d = e.target.closest("[data-dow]");
+    if (f && f.dataset.freq !== Z.form.freq) {
+      Z.form.freq = f.dataset.freq; paintFreq(); paintSchedule();
+      const next = $("#f-dom, #f-cron, [data-dow]", $("#p-freq")); next ? next.focus() : shut($("#d-freq"));
+    }
+    if (d) { Z.form.dow = +d.dataset.dow; paintFreq(); paintSchedule(); shut($("#d-freq")); }
+  });
+  $("#p-freq").addEventListener("input", (e) => {
+    if (e.target.id === "f-dom") { const n = e.target.value.replace(/\D/g, "").slice(0, 2); Z.form.dom = n && +n > 28 ? "28" : n === "0" ? "1" : n; e.target.value = Z.form.dom; }
+    if (e.target.id === "f-cron") Z.form.cron = e.target.value;
+    paintSchedule();
+  });
+  $("#p-sports").addEventListener("click", (e) => {
+    const p = e.target.closest("[data-sprofile]");
+    if (!p || p.dataset.sprofile === Z.form.profile) return;
+    Z.form.profile = p.dataset.sprofile; paintSPorts(); paintSchedule();
+    if (Z.form.profile === "custom") $("#f-custom").focus(); else shut($("#d-sports"));
+  });
+  $("#p-sports").addEventListener("input", (e) => { if (e.target.id === "f-custom") { Z.form.custom = e.target.value; paintSchedule(); } });
+  $("#slot").addEventListener("input", (e) => { Z.form.slot = +e.target.value; paintSchedule(); });
+  $("#earlier").addEventListener("click", () => { Z.form.slot = (Z.form.slot + 47) % 48; paintSchedule(); });
+  $("#later").addEventListener("click", () => { Z.form.slot = (Z.form.slot + 1) % 48; paintSchedule(); });
+  $("#save").addEventListener("click", saveSchedule);
+  $("#del").addEventListener("click", deleteSchedule);
+  const pick = (e) => { const t = e.target.closest("[data-ztab]"); if (t && t.dataset.ztab !== Z.tab) { Z.tab = t.dataset.ztab; Z.tswap = 1 - Z.tswap; paintZTab(); } };
+  const zt = $("#z-tabs");
+  zt.addEventListener("mouseover", pick); zt.addEventListener("click", pick); zt.addEventListener("focusin", pick);
 }
-
-function profileLabel(id, custom) {
-  if (id === "custom") return `พอร์ต ${custom}`;
-  const p = (cfg.port_profiles || []).find((x) => x.id === (id || "common"));
-  return p ? `${p.label} (${num(p.ports.length)} พอร์ต)` : "";
+function loadForm() {
+  const it = Z.items.find((x) => x.id === Z.cur);
+  if (!it) { Z.form = blankForm(); return; }
+  const c = parseCron(it.cron);
+  Z.form = { name: it.name, targets: it.targets.join(", "), freq: c.freq, slot: c.slot, dow: c.dow, dom: c.dom, cron: it.cron, profile: it.port_profile || "common", custom: it.custom_ports || "" };
 }
-function schedList(items) {
-  if (!items.length) return `<div class="box"><div class="box-row"><div><div class="t">ยังไม่มีตารางเวลา</div><div class="d">สร้างได้จากแบบฟอร์มด้านล่าง</div></div></div></div>`;
-  return `<div class="box">${items.map((s) => `<div class="box-row">
-    <div><div class="t">${esc(s.name)}</div>
-      <div class="d"><span class="mono">${esc(s.targets.join(", "))}</span> · ${esc(describeCron(s.cron))} · ${esc(profileLabel(s.port_profile, s.custom_ports))}</div>
-      <div class="d">ครั้งถัดไป ${fmtDate(s.next_run)}${s.last_run ? ` · ครั้งล่าสุด ${fmtDate(s.last_run)}` : " · ยังไม่เคยทำงาน"}
-        ${s.last_job_id ? ` · <a href="#/results/${esc(s.last_job_id)}">ดูผลล่าสุด</a>` : ""}</div></div>
-    <button class="btn btn-quiet" data-del="${esc(s.id)}" data-name="${esc(s.name)}" aria-label="ลบ ${esc(s.name)}">${icon("trash")}ลบ</button></div>`).join("")}</div>`;
+function fillForm() {
+  $("#f-name").value = Z.form.name; $("#f-targets").value = Z.form.targets;
+  $("#l-k").textContent = `ตารางเวลาที่มี (${num(Z.items.length)})`;
+  $("#l-list").innerHTML = Z.items.map((it) => { const c = parseCron(it.cron); return `<button type="button" class="mi" data-sid="${esc(it.id)}" aria-pressed="${it.id === Z.cur}"><span style="min-width:0;flex:1"><span class="ot">${esc(it.name)}</span><span class="od">${esc(it.targets.join(", "))} · ${esc(freqWord(c))}${c.freq !== "custom" ? ` ${slotTime(c.slot)}` : ""} · ครั้งถัดไป ${esc(fmtDate(it.next_run))}</span></span></button>`; }).join("")
+    + `<button type="button" class="mi new" data-sid="new" aria-pressed="${Z.cur === "new"}" style="margin-top:6px">+ สร้างตารางเวลาใหม่</button>`;
+  $("#del").hidden = Z.cur === "new";
+  paintFreq(); paintSPorts();
 }
-function auditTable(entries) {
-  if (!entries || !entries.length) return `<div class="box-row"><div class="d">ยังไม่มีบันทึก</div></div>`;
-  return `<table class="audit"><thead><tr><th>เวลา</th><th>เหตุการณ์</th><th>รายละเอียด</th></tr></thead><tbody>
-    ${entries.map((e) => `<tr><td>${fmtDate(e.ts)}</td><td>${esc(AUDIT[e.event] || e.event)}</td><td>${auditDetail(e)}</td></tr>`).join("")}</tbody></table>`;
+function paintFreq() {
+  const f = Z.form;
+  const FREQ = [["daily", "ทุกวัน", "วันละครั้ง"], ["weekdays", "วันทำการ", "จันทร์–ศุกร์"], ["weekly", "ทุกสัปดาห์", "เลือกวัน"], ["monthly", "ทุกเดือน", "เลือกวันที่"], ["custom", "กำหนดเอง", "รูปแบบ cron"]];
+  $("#p-freq").innerHTML = `<div class="stag"><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+    ${FREQ.map(([k, t, d]) => `<button type="button" class="opt" data-freq="${k}" aria-pressed="${f.freq === k}"><span style="min-width:0"><span class="ot">${t}</span><span class="od">${d}</span></span></button>`).join("")}</div>
+    ${f.freq === "weekly" ? `<div role="group" aria-label="วันในสัปดาห์" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin-top:10px">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button type="button" class="day" data-dow="${d}" aria-pressed="${+f.dow === d}" aria-label="วัน${DOW[d]}">${DS[d]}</button>`).join("")}</div>` : ""}
+    ${f.freq === "monthly" ? `<label style="display:block;margin-top:10px"><span class="lbl">วันที่ของเดือน (1–28)</span><input class="inp" id="f-dom" value="${esc(f.dom)}" inputmode="numeric" style="width:96px;text-align:center"></label>` : ""}
+    ${f.freq === "custom" ? `<label style="display:block;margin-top:10px"><span class="lbl">รูปแบบ cron ${tip("5 ช่อง: นาที ชั่วโมง วันที่ เดือน วันในสัปดาห์ (0 = อาทิตย์) เช่น 30 1 * * 1-5 = 01:30 น. วันจันทร์–ศุกร์")}</span><input class="inp mono" id="f-cron" value="${esc(f.cron)}" spellcheck="false" autocomplete="off"></label>` : ""}</div>`;
 }
-
-function wireSchedules() {
-  const form = $("#sched-form");
-  const show = () => {
-    S.freq = form.freq.value; S.time = form.time.value; S.dow = form.dow.value; S.dom = form.dom.value; S.cron = form.cron.value;
-    $("[data-f=time]", form).hidden = S.freq === "custom";
-    $("[data-custom-ports]", form).hidden = form.port_profile.value !== "custom";
-    $("[data-f=dow]", form).hidden = S.freq !== "weekly";
-    $("[data-f=dom]", form).hidden = S.freq !== "monthly";
-    $("[data-f=cron]", form).hidden = S.freq !== "custom";
-    const c = formCron();
-    $("#sched-preview").innerHTML = S.freq === "hourly" ? `จะสแกนทุกชั่วโมง นาทีที่ ${esc(c.split(" ")[0])} · <span class="mono">${esc(c)}</span>`
-      : `จะสแกน${esc(describeCron(c).replace(/^ทุก/, "ทุก"))} (เวลาประเทศไทย) · <span class="mono">${esc(c)}</span>`;
-  };
-  form.addEventListener("input", show); form.addEventListener("change", show); show();
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const err = $("#sched-err"); err.hidden = true;
-    const targets = form.targets.value.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
-    const name = form.name.value.trim();
-    const c = checkTargets(targets);
-    const fail = (m) => { err.textContent = m; err.hidden = false; };
-    if (!name) return fail("กรุณาตั้งชื่อตารางเวลา");
-    if (c.error) return fail(c.error);
-    if (c.outside.length) return fail(`อยู่นอกขอบเขตที่อนุญาต: ${c.outside.join(", ")}`);
-    if (c.count > cfg.max_targets) return fail(`เกินจำนวนสูงสุด ${num(cfg.max_targets)} ที่อยู่`);
-    const pc = portCount(form.port_profile.value, form.custom_ports.value);
-    if (pc.error) return fail(pc.error);
-    if (c.count * pc.n > cfg.max_port_probes) return fail(`งานใหญ่เกินไป (${num(c.count)} ที่อยู่ × ${num(pc.n)} พอร์ต) — ลดขนาดวงหรือจำนวนพอร์ตลง`);
-    const btn = $("button[type=submit]", form); btn.disabled = true;
+function paintSPorts() {
+  const f = Z.form;
+  $("#p-sports").innerHTML = `<div class="stag"><div class="ptitle">ชุดพอร์ต ${tip("ชุดพอร์ตแบบเดียวกับหน้าสแกน · “ใช้บ่อย” คือค่าแนะนำ")}</div>
+    ${profileOpts("data-sprofile", f.profile)}
+    ${f.profile === "custom" ? `<label style="display:block;margin-top:10px"><span class="lbl">พอร์ตที่ต้องการ</span><input class="inp" id="f-custom" value="${esc(f.custom)}" autocomplete="off" spellcheck="false"></label>` : ""}</div>`;
+}
+const formTargets = (f) => f.targets.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+function scheduleProblem() {
+  const f = Z.form;
+  if (!f.name.trim()) return "ตั้งชื่อตารางเวลาก่อน (ชี้ที่แถบ 1)";
+  const c = checkTargets(formTargets(f));
+  if (c.error) return c.error;
+  if (c.outside.length) return `อยู่นอกขอบเขตที่อนุญาต: ${c.outside.join(", ")}`;
+  if (c.count > cfg.max_targets) return `เกินจำนวนสูงสุด ${num(cfg.max_targets)} ที่อยู่ต่อครั้ง`;
+  const pc = portCount(f.profile, f.custom);
+  if (pc.error) return pc.error;
+  if (c.count * pc.n > cfg.max_port_probes) return `งานใหญ่เกินไป (${num(c.count)} ที่อยู่ × ${num(pc.n)} พอร์ต)`;
+  if (f.freq === "custom" && f.cron.trim().split(/\s+/).length !== 5) return "รูปแบบ cron ต้องมี 5 ช่อง";
+  return "";
+}
+function paintSchedule() {
+  const f = Z.form, isNew = Z.cur === "new", custom = f.freq === "custom";
+  const hh = Math.floor(f.slot / 2), mm = f.slot % 2 ? 30 : 0;
+  $("#l-v").textContent = isNew ? "+ ตารางเวลาใหม่" : f.name || "—";
+  $("#sum-who").textContent = `${f.name || "ยังไม่ได้ตั้งชื่อ"} · ${f.targets || "—"}`;
+  $("#sum-freq").textContent = custom ? "กำหนดเอง (cron)" : `${freqWord(f)} · ${slotTime(f.slot)}`;
+  const pc = portCount(f.profile, f.custom);
+  $("#sum-sports").textContent = pc.error ? "รูปแบบพอร์ตไม่ถูกต้อง" : `${(PROFILE_TEXT[f.profile] || [f.profile])[0]} · ${num(pc.n)} พอร์ต`;
+  $("#hand").style.transform = `rotate(${((hh + mm / 60) / 24) * 360}deg)`;
+  const th = Math.PI * (1 - f.slot / 47), mx = 200 + 160 * Math.cos(th), my = 362 + 45 * Math.sin(th);
+  $("#dial-mark").style.transform = `translate(${mx.toFixed(1)}px,${my.toFixed(1)}px)`;
+  $("#dial-ring").style.strokeDasharray = `${Math.round((f.slot / 47) * 100)} 100`;
+  $("#slot").value = f.slot;
+  $("#dial-wrap").style.opacity = custom ? 0.35 : 1; $("#slot").disabled = custom; $("#earlier").disabled = custom; $("#later").disabled = custom;
+  $("#when").textContent = custom ? "กำหนดเวลาด้วย cron" : `${freqWord(f)} เวลา`;
+  $("#time").textContent = custom ? formCron(f) || "—" : `${slotTime(f.slot)} น.`;
+  $("#dial").setAttribute("aria-label", custom ? "นาฬิกา (ไม่ใช้เมื่อกำหนดด้วย cron)" : `นาฬิกา 24 ชั่วโมง ตั้งไว้ที่ ${slotTime(f.slot)}`);
+  const problem = scheduleProblem();
+  $("#summary").innerHTML = problem ? `<span style="color:var(--crit);font-weight:600">${esc(problem)}</span>`
+    : `จะสแกน <b class="num">${esc(formTargets(f).join(", "))}</b> ${esc(freqWord(f))}${custom ? ` (<span class="mono">${esc(formCron(f))}</span>)` : ` เวลา ${slotTime(f.slot)} น.`} ด้วยชุดพอร์ต${esc((PROFILE_TEXT[f.profile] || [""])[0])} · ครั้งถัดไป ${esc(nextRunText(f))}`;
+  $("#save").innerHTML = `${isNew ? "สร้างตารางเวลา" : "บันทึกการแก้ไข"}${ic("arrow", 20, 2.2)}`;
+  $("#save").disabled = !!problem;
+}
+async function saveSchedule() {
+  const f = Z.form, btn = $("#save");
+  const body = { name: f.name.trim(), targets: formTargets(f), cron: formCron(f), enabled: true, port_profile: f.profile, custom_ports: f.profile === "custom" ? f.custom : "" };
+  btn.disabled = true;
+  try {
+    const saved = Z.cur === "new" ? await api("/api/schedules", { method: "POST", body: JSON.stringify(body) }) : await api(`/api/schedules/${encodeURIComponent(Z.cur)}`, { method: "PUT", body: JSON.stringify(body) });
+    Z.items = await api("/api/schedules"); Z.cur = saved.id; loadForm(); fillForm(); paintSchedule();
+    const it = Z.items.find((x) => x.id === saved.id);
+    toast(`บันทึกแล้ว · ครั้งถัดไป ${fmtDate(it && it.next_run)}`);
+    Z.audit = (await api("/api/audit")).entries || []; if (Z.tab === "audit") paintZTab();
+  } catch (err) { toast(err.message); btn.disabled = false; }
+}
+function deleteSchedule() {
+  const it = Z.items.find((x) => x.id === Z.cur);
+  if (!it) return;
+  const m = openModal(`<h2>ลบตารางเวลานี้?</h2><p class="lead">“${esc(it.name)}” จะไม่ทำงานอีก ผลการสแกนที่ผ่านมายังอยู่ในประวัติ</p>
+    <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="button" class="btn btn-danger" data-ok>${ic("trash", 17)}ลบ</button></div>`, "ลบตารางเวลา");
+  $("[data-ok]", m.el).addEventListener("click", async () => {
+    m.close();
     try {
-      const port_profile = form.port_profile.value, custom_ports = port_profile === "custom" ? form.custom_ports.value : "";
-      await api("/api/schedules", { method: "POST", body: JSON.stringify({ name, targets, cron: formCron(), enabled: true, port_profile, custom_ports }) });
-      $("#sched-list").innerHTML = schedList(await api("/api/schedules"));
-      form.name.value = ""; toast("บันทึกตารางเวลาแล้ว");
-    } catch (ex) { fail(ex.message); } finally { btn.disabled = false; }
+      await api(`/api/schedules/${encodeURIComponent(it.id)}`, { method: "DELETE" });
+      Z.items = await api("/api/schedules"); Z.cur = Z.items[0] ? Z.items[0].id : "new"; loadForm(); fillForm(); paintSchedule(); toast("ลบแล้ว");
+      Z.audit = (await api("/api/audit")).entries || []; if (Z.tab === "audit") paintZTab();
+    } catch (err) { toast(err.message); }
   });
-  $("#sched-list").addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-del]"); if (!b) return;
-    const ok = await confirmModal({ title: "ลบตารางเวลานี้?", text: `“${b.dataset.name}” จะไม่ทำงานอีก ผลการสแกนที่ผ่านมายังอยู่ในประวัติ`, ok: "ลบ", danger: true });
-    if (!ok) return;
-    try { await api(`/api/schedules/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" }); $("#sched-list").innerHTML = schedList(await api("/api/schedules")); toast("ลบแล้ว"); }
-    catch (err) { toast(err.message); }
-  });
+}
+function paintZTab() {
+  const ids = ["scope", "audit", "about"];
+  $$("[data-ztab]").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.ztab === Z.tab)));
+  $("#z-bar").style.transform = `translateX(${ids.indexOf(Z.tab) * 100}%)`;
+  let html;
+  if (Z.tab === "scope") {
+    html = `<p class="muted" style="font-size:13.5px;line-height:1.6">ช่วง IP ที่ระบบนี้สแกนได้ ผู้ติดตั้งตั้งไว้ใน <span class="mono">docker-compose.yml</span> (THSCAN_ALLOWED_CIDRS) — ตั้งใจให้แก้จากหน้านี้ไม่ได้ · การตรวจเว็บไซต์ใช้เกณฑ์ “โดเมนหน่วยงาน” แทน</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:10px;font-size:13.5px">
+      ${(cfg.allowed_cidrs || []).map((c) => { const b = cidrBounds(c); return `<div style="padding:10px 12px;border-radius:12px;background:var(--bg)"><b class="num">${esc(c)}</b><br><span class="muted">${b ? `${num(b.bcast - b.net + 1)} ที่อยู่` : ""}</span></div>`; }).join("")}
+      <div style="padding:10px 12px;border-radius:12px;background:var(--soft)"><b>โดเมนหน่วยงาน</b><br><span class="muted">${esc((cfg.gov_suffixes || []).join(" · "))}</span></div>
+      <div style="padding:10px 12px;border-radius:12px;background:var(--bg)"><b>สูงสุดต่อครั้ง</b><br><span class="muted">${num(cfg.max_targets)} ที่อยู่ · ${num(cfg.max_port_probes)} ครั้งตรวจพอร์ต</span></div>
+      <div style="padding:10px 12px;border-radius:12px;background:var(--bg)"><b>พอร์ตเว็บที่ตรวจ PHP</b><br><span class="muted num">${esc((cfg.web_ports || []).join(", "))}</span></div></div>`;
+  } else if (Z.tab === "audit") {
+    html = Z.audit.length ? `<ol class="audit">${Z.audit.slice(0, 40).map((e) => { const a = AUDIT[e.event] || [e.event, "b-grey"]; return `<li><span class="muted num">${esc(fmtDate(e.ts))}</span><span style="min-width:0;overflow-wrap:anywhere"><span class="badge ${a[1]}" style="margin-right:6px">${esc(a[0])}</span>${auditDetail(e)}</span></li>`; }).join("")}</ol>
+      <p class="muted" style="margin-top:8px;font-size:12.5px">เก็บที่ data/audit.log เพื่อตรวจสอบย้อนหลัง</p>` : `<p class="muted">ยังไม่มีบันทึก</p>`;
+  } else {
+    html = `<dl class="kv">
+      <div><dt>เวอร์ชัน</dt><dd>v${esc(cfg.version)}</dd></div><div><dt>สัญญาอนุญาต</dt><dd>โอเพนซอร์ส ใช้ฟรี</dd></div>
+      <div><dt>ข้อมูลอยู่ที่ไหน</dt><dd>ในเครื่องที่ติดตั้งเท่านั้น (data/)</dd></div><div><dt>ตรวจอะไร</dt><dd>PHP2Shell · PHP หมดอายุ · พอร์ต · header</dd></div>
+      <div><dt>เขตเวลา</dt><dd>${esc(cfg.timezone || "Asia/Bangkok")}</dd></div><div><dt>ฟอนต์</dt><dd>Inter · Anuphan (SIL OFL)</dd></div></dl>`;
+  }
+  const p = $("#z-panel"); p.className = `tabpanel swap${Z.tswap}`; p.innerHTML = html;
 }
 
 route();

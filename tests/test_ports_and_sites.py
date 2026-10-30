@@ -240,3 +240,17 @@ async def test_host_found_when_only_a_profile_port_is_open(monkeypatch, tmp_path
     (d,) = job.devices
     assert [x.port for x in d.services] == [3306] and d.services[0].name == "MySQL"
     assert d.severity.value == "safe"  # an open port is not a vulnerability
+
+
+def test_schedule_update_keeps_id(api, tmp_path, monkeypatch):
+    client, _ = api
+    monkeypatch.setattr(main.store, "save_schedules", lambda: None)
+    created = client.post("/api/schedules", json={"name": "a", "targets": ["10.0.0.0/24"], "cron": "0 2 * * *"}).json()
+    sid = created["id"]
+    upd = client.put(f"/api/schedules/{sid}", json={"name": "b", "targets": ["10.0.1.0/24"], "cron": "30 1 * * 1-5", "port_profile": "top100"})
+    assert upd.status_code == 200, upd.text
+    body = upd.json()
+    assert (body["id"], body["name"], body["cron"], body["port_profile"]) == (sid, "b", "30 1 * * 1-5", "top100")
+    assert client.put(f"/api/schedules/{sid}", json={"name": "b", "targets": ["8.8.8.0/24"], "cron": "0 2 * * *"}).status_code == 403
+    assert client.put("/api/schedules/nope", json={"name": "b", "targets": ["10.0.1.0/24"], "cron": "0 2 * * *"}).status_code == 404
+    client.delete(f"/api/schedules/{sid}")

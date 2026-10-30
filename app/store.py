@@ -226,6 +226,20 @@ class JobStore:
         )
         return item
 
+    def update_schedule(self, sched_id: str, payload: ScheduleCreate) -> Optional[ScheduleItem]:
+        """Change a schedule in place, keeping its id and run history."""
+        item = self._schedules.get(sched_id)
+        if item is None:
+            return None
+        for field in ("name", "targets", "cron", "enabled", "port_profile", "custom_ports"):
+            setattr(item, field, getattr(payload, field))
+        self.save_schedules()
+        self.audit.record(
+            "schedule_updated", schedule_id=sched_id, name=payload.name,
+            targets=payload.targets, cron=payload.cron,
+        )
+        return item
+
     def delete_schedule(self, sched_id: str) -> bool:
         if sched_id in self._schedules:
             del self._schedules[sched_id]
