@@ -10,6 +10,15 @@ from typing import Dict, List, Optional, Tuple
 
 MAX_CUSTOM_PORTS = 1024
 
+# Ports that speak a known non-HTTP protocol. An open port NOT in this set is
+# worth an HTTP probe (so PHP on a non-standard port like 18080 is read), while
+# sending an HTTP GET to SSH / a database here would be pointless noise.
+NON_WEB_PORTS = frozenset({
+    22, 23, 25, 53, 110, 111, 135, 137, 138, 139, 143, 161, 389, 445,
+    465, 514, 587, 636, 993, 995, 1433, 1521, 1723, 2049,
+    3306, 3389, 5432, 5900, 5901, 6379, 11211, 27017,
+})
+
 COMMON = [21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 389, 443, 445, 993, 995,
           1433, 1521, 2049, 2375, 3306, 3389, 5432, 5900, 5985, 6379, 8080, 8443,
           9200, 11211, 27017]

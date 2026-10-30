@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.config import settings
 from app.models import ScanJob, ScanRequest
-from app.scanner import http_probe, netlimit, ports, sites
+from app.scanner import http_probe, netlimit, ports, sites, vuln_rules
 
 
 # --- ports -----------------------------------------------------------------
@@ -197,7 +197,9 @@ async def test_engine_scans_site_by_host_and_lists_services(monkeypatch, tmp_pat
     assert job.state.value == "completed", job.error
     (d,) = job.devices
     assert d.hostname == "web.agency.go.th" and d.matched_suffix == "go.th"
-    assert calls == [("10.9.9.9", 443, "web.agency.go.th")]
+    # the real host is HTTP-probed on its web port; SSH/MySQL are never probed
+    assert ("10.9.9.9", 443, "web.agency.go.th") in calls
+    assert not any(c[0] == "10.9.9.9" and c[1] in (22, 3306) for c in calls)
     assert [x.port for x in d.services] == [22, 443, 3306]  # 3128 was the proxy
     assert d.services[2].name == "MySQL" and d.services[2].note
     assert job.target_label == "web.agency.go.th"
@@ -240,6 +242,55 @@ async def test_host_found_when_only_a_profile_port_is_open(monkeypatch, tmp_path
     (d,) = job.devices
     assert [x.port for x in d.services] == [3306] and d.services[0].name == "MySQL"
     assert d.severity.value == "safe"  # an open port is not a vulnerability
+
+
+async def test_php_on_a_non_standard_port_is_probed_and_flagged(monkeypatch, tmp_path):
+    # the real-world miss: PHP served on a custom port (e.g. 18080) that is in
+    # no web profile. The host is up and the port is open, so the HTTP/PHP probe
+    # must run there — not only on 80/443/8080/8443 — or it reads as "safe".
+    from app.config import Settings
+    from app.scanner import discovery, engine as eng, port_scanner
+
+    probed = []
+
+    async def fake_intercepted(ports_, timeout, canary=discovery.CANARY_IP):
+        return set()
+
+    async def fake_alive(ip, ports_, timeout):
+        return (18080 in ports_), (6 if 18080 in ports_ else None)
+
+    async def fake_open(ip, ports_, timeout):
+        return [p for p in (18080, 2222) if p in ports_]  # 18080 web, 2222 ssh-ish
+
+    async def fake_probe(client, ip, port, host=None):
+        probed.append(port)
+        if port == 18080:
+            headers = {"server": "nginx", "x-powered-by": "PHP/8.2.10"}
+            findings, ver, cms, server = vuln_rules.evaluate(
+                scheme="http", headers=headers, body="")
+            return http_probe.WebResult(port=port, scheme="http", status_code=200,
+                                        server=server, powered_by="PHP/8.2.10",
+                                        php_version=ver, cms=cms, findings=findings,
+                                        headers=headers, fingerprint="x")
+        return None  # 2222 doesn't speak HTTP
+
+    monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
+    monkeypatch.setattr(discovery, "alive_latency", fake_alive)
+    monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(port_scanner, "open_ports", fake_open)
+    monkeypatch.setattr(http_probe, "probe_service", fake_probe)
+
+    s = Settings(); s.web_ports = [80, 443, 8080, 8443]; s.liveness_ports = []; s.data_dir = str(tmp_path)
+    req = ScanRequest(targets=["10.0.0.9"], port_profile="custom", custom_ports="18080, 2222")
+    job = ScanJob(id="p", created_at=datetime.now(timezone.utc), request=req)
+    await eng.ScanEngine(s).run(job, asyncio.Event())
+
+    assert job.state.value == "completed", job.error
+    (d,) = job.devices
+    assert 18080 in probed  # the custom web port WAS probed for PHP
+    assert d.php_version == "8.2.10" and d.severity.value == "critical"
+    assert any(f.rule_id == "php2shell" for f in d.findings)
+    assert 18080 in d.open_ports  # recorded as a real web port
 
 
 def test_schedule_update_keeps_id(api, tmp_path, monkeypatch):

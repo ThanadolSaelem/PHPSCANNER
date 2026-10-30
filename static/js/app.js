@@ -375,7 +375,9 @@ function scanPlan() {
     plan.valid = list.length > 0;
     plan.label = "เว็บไซต์"; plan.big = list.length > 1 ? `${list.length} เว็บไซต์` : (list[0] || "—").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
     plan.summary = `เว็บไซต์ · ${plan.big}`;
+    const asIp = list.length === 1 && parseIpTarget(list[0]);
     if (!plan.valid) plan.reason = "วางลิงก์เว็บไซต์ก่อน";
+    else if (asIp) { plan.valid = false; plan.scoped = false; plan.reason = `นี่คือเลข IP — กดปุ่มด้านล่างเพื่อตรวจ ${asIp.ip} ในโหมดเครื่องเดียว`; plan.sub = "ไม่ใช่โดเมนหน่วยงาน"; }
     else if (!fresh) { plan.pending = true; plan.reason = "กำลังตรวจสอบลิงก์…"; plan.sub = "กำลังค้นหา IP จาก DNS…"; }
     else {
       const bad = S.report.filter((r) => r.problems.length);
@@ -479,6 +481,8 @@ async function viewScan(_, alive) {
       const first = $("input", pt); first && first.focus({ preventScroll: true });
     }
     if (d) { const b = cidrBounds(d.dataset.detected); if (b) { S.mode = "subnet"; S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(16, b.prefix)); S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true); shut($("#d-target")); } }
+    const u = e.target.closest("[data-use-ip]");
+    if (u) useIpTarget(u.dataset.ip, u.dataset.port ? +u.dataset.port : null);
   });
   pt.addEventListener("input", (e) => {
     const t = e.target, key = t.dataset.oct;
@@ -527,6 +531,27 @@ async function viewScan(_, alive) {
     if (e.target.id === "delay") S.delay = +e.target.value;
     renderAdvValues(); updateScan();
   });
+}
+// A website-mode entry that is really an IP (optionally with a port), e.g.
+// "http://10.255.254.68:18080" → {ip, port}. Lets us offer a one-click switch
+// to single-machine mode instead of a dead-end "that's an IP" error.
+function parseIpTarget(text) {
+  const t = String(text).trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+  const m = t.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/);
+  if (!m || ipToInt(m[1]) == null) return null;
+  const port = m[2] ? +m[2] : null;
+  if (port != null && (port < 1 || port > 65535)) return null;
+  return { ip: m[1], port };
+}
+// Switch the scan form to "single machine" for this IP, and if a non-standard
+// port was given, add it to a custom port set so the host is actually probed.
+function useIpTarget(ip, port) {
+  S.mode = "single"; S.single = ip.split(".");
+  const web = cfg.web_ports || [];
+  if (port && !web.includes(port)) { S.profile = "custom"; S.custom = [...web, port].join(", "); }
+  S.swap = 1 - S.swap;
+  renderTargetPanel(); renderPortsPanel(); updateScan(true);
+  shut($("#d-target"));
 }
 function focusOct(input, dir) {
   const all = $$(`[data-oct="${input.dataset.oct}"]`);
@@ -609,8 +634,10 @@ function renderAdvValues() {
 let resolveTimer;
 function resolveSites() {
   clearTimeout(resolveTimer);
-  const key = siteList().join("\n");
+  const list = siteList(), key = list.join("\n");
   if (!key) { S.report = null; S.reportFor = ""; renderSitePreview(); return; }
+  // a bare IP isn't a website — don't call /api/resolve, just show the switch
+  if (list.length === 1 && parseIpTarget(list[0])) { S.report = null; S.reportFor = ""; renderSitePreview(); return; }
   if (key === S.reportFor) return;
   renderSitePreview();
   resolveTimer = setTimeout(async () => {
@@ -625,8 +652,19 @@ function resolveSites() {
 function renderSitePreview() {
   const box = $("#site-preview");
   if (!box) return;
-  const key = siteList().join("\n");
+  const list = siteList(), key = list.join("\n");
   if (!key) { box.innerHTML = `<p class="od">ตรวจได้เฉพาะโดเมนหน่วยงาน (${esc((cfg.gov_suffixes || []).join(", "))})</p>`; return; }
+  // typed an IP (maybe with a port) into website mode? offer a one-click switch
+  if (list.length === 1) {
+    const t = parseIpTarget(list[0]);
+    if (t) {
+      box.innerHTML = `<div style="padding:10px 12px;border-radius:12px;background:var(--warn-bg)">
+        <div style="font-size:13px;color:var(--warn);font-weight:600">นี่คือเลข IP ไม่ใช่โดเมนหน่วยงาน — โหมดเว็บไซต์ใช้กับลิงก์ .go.th ฯลฯ</div>
+        <button type="button" class="btn btn-g" data-use-ip="${esc(t.ip)}" ${t.port ? `data-port="${t.port}"` : ""} style="margin-top:8px">
+          ${ic("cube", 16)} ตรวจ ${esc(t.ip)} ในโหมดเครื่องเดียว${t.port ? ` · พอร์ต ${t.port}` : ""}</button></div>`;
+      return;
+    }
+  }
   if (S.reportFor !== key || !S.report) { box.innerHTML = `<p class="od">กำลังค้นหา IP จาก DNS…</p>`; return; }
   box.innerHTML = S.report.map((r) => `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;font-size:13px">
     <span class="badge ${r.problems.length ? "b-bad" : "b-ok"}" style="padding:4px 7px">${ic(r.problems.length ? "x" : "check", 13, 3)}</span>

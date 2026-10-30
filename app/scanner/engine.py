@@ -111,7 +111,7 @@ class ScanEngine:
             check_ports = sorted(set(live_ports) | set(scan_ports))
             blocked = await discovery.intercepted_ports(check_ports, s.connect_timeout)
             canary_fp: Dict[int, str] = {}
-            for port in sorted(p for p in blocked if p in web_ports):
+            for port in sorted(p for p in blocked if p not in ports.NON_WEB_PORTS):
                 wr = await http_probe.probe_service(client, discovery.CANARY_IP, port)
                 if wr is not None:
                     canary_fp[port] = wr.fingerprint
@@ -169,7 +169,11 @@ class ScanEngine:
                     php_version = server = cms = None
                     merged_headers: Dict[str, str] = {}
                     seen_rules: set[str] = set()
-                    for port in [p for p in open_all if p in web_ports]:
+                    # probe HTTP on every open port that isn't a known non-web
+                    # service — PHP on a custom port (e.g. 18080) must be read,
+                    # not just standard web ports
+                    probe_ports = [p for p in open_all if p not in ports.NON_WEB_PORTS]
+                    for port in probe_ports:
                         if site_host:
                             wr = await http_probe.probe_service(client, ip, port, host=site_host)
                         else:
