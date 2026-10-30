@@ -32,6 +32,8 @@ VOLUME ["/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=4s --start-period=5s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/healthz" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Honour $PORT when the host assigns one (e.g. Render, Fly, Cloud Run);
+# defaults to 8000 for local docker-compose. Shell form so $PORT expands.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

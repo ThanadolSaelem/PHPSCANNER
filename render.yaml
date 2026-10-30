@@ -1,0 +1,37 @@
+# Render blueprint — FOR DEMO / UI SHOWCASE ONLY.
+#
+# thscan is a LAN scanner. Render runs on the public internet, so it CANNOT
+# reach an internal/government network (10.x / 172.16.x / 192.168.x) — the very
+# targets this tool exists to scan. Scanning external hosts from Render may also
+# violate Render's Acceptable Use Policy (no port scanning / network abuse).
+#
+# For real scanning, run on-prem on a machine inside the target network:
+#     docker compose up -d --build
+#
+# This file only makes the web UI reachable on Render.
+services:
+  - type: web
+    name: thscan
+    runtime: docker
+    # A paid plan is required to attach the persistent disk below. On the free
+    # plan, remove the `disk:` block — scan history/schedules then reset on every
+    # deploy or restart (Render's filesystem is ephemeral).
+    plan: starter
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: THSCAN_DATA_DIR
+        value: /data
+      # Open mode (scan anything typed). Set to "1" to enforce the CIDR scope.
+      - key: THSCAN_ENFORCE_SCOPE
+        value: "0"
+      - key: THSCAN_ALLOWED_CIDRS
+        value: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      - key: THSCAN_TZ
+        value: Asia/Bangkok
+      - key: THSCAN_MAX_CONCURRENCY
+        value: "50"
+    disk:
+      name: thscan-data
+      mountPath: /data
+      sizeGB: 1
