@@ -100,7 +100,7 @@ async def _try(
         body = ""
 
     findings, php_version, cms, server = vuln_rules.evaluate(
-        scheme=scheme, headers=merged, body=body
+        scheme=scheme, headers=merged, body=body, final_url=f"{scheme}://{name}:{port}{path}"
     )
     return WebResult(
         port=port,

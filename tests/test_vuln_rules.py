@@ -51,6 +51,52 @@ def test_cms_detection():
     assert vr.detect_cms("plain", {}) is None
 
 
+def test_php_signals_catch_hidden_version():
+    # PHPSESSID cookie alone is enough to say "PHP is here"
+    present, why = vr.php_signals({"set-cookie": "PHPSESSID=abc123; path=/; HttpOnly"}, "", "")
+    assert present and "PHPSESSID" in why
+    # a .php page after redirects
+    present, _ = vr.php_signals({}, "", "https://www.agency.go.th/index.php")
+    assert present
+    # a same-site .php link, and a PHP runtime error
+    assert vr.php_signals({}, '<a href="/login.php">', "")[0]
+    assert vr.php_signals({}, "<b>Fatal error</b>: ... in <b>/var/www/x.php</b> on line <b>12</b>", "")[0]
+
+
+def test_php_signals_do_not_fire_on_static_site():
+    # a plain static page, even one that links OUT to someone else's .php, is not PHP
+    present, _ = vr.php_signals(
+        {"set-cookie": "visited=1"},
+        '<a href="https://other.example/tool.php">ext</a> plain php word in prose',
+        "https://www.agency.go.th/about",
+    )
+    assert present is False
+
+
+def test_hidden_version_php_is_not_safe():
+    # ThaiCERT-style: nginx banner, expose_php Off, but a PHPSESSID cookie leaks.
+    # Must land on "undetermined" (low), never "safe".
+    findings, ver, _, _ = vr.evaluate(
+        scheme="https",
+        headers={"server": "nginx", "set-cookie": "PHPSESSID=9f; path=/"},
+        body="<html>welcome</html>",
+    )
+    assert ver is None
+    undet = next(f for f in findings if f.rule_id == "php-undetermined")
+    assert undet.severity == Severity.low and "PHPSESSID" in undet.evidence
+    assert vr.device_severity(findings) == Severity.low  # not safe
+    assert "ยืนยัน" in vr.thaicert_assessment(Severity.low, True, findings)
+
+
+def test_truly_static_site_stays_safe():
+    # a plain HTTP static site: no PHP finding at all, device stays safe
+    findings, ver, _, _ = vr.evaluate(
+        scheme="http", headers={"server": "nginx"}, body="<html>static</html>")
+    assert ver is None
+    assert not any(f.rule_id in ("php2shell", "php-undetermined", "php-eol") for f in findings)
+    assert vr.device_severity(findings) == Severity.safe
+
+
 def test_device_severity_and_assessment():
     findings, *_ = vr.evaluate(scheme="https", headers={"x-powered-by": "PHP/8.3.10"}, body="")
     assert vr.device_severity(findings) == Severity.critical
