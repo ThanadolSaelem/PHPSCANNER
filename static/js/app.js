@@ -230,7 +230,7 @@ function specBounds(spec) {
   return [n, n];
 }
 let allowedNets = [];
-const inScope = (a, b) => allowedNets.some((n) => n.net <= a && b <= n.bcast);
+const inScope = (a, b) => !(cfg && cfg.enforce_scope) || allowedNets.some((n) => n.net <= a && b <= n.bcast);
 function checkTargets(specs) {
   const out = { count: 0, error: null, outside: [] };
   if (!specs.length) { out.error = "ยังไม่ได้ระบุเป้าหมาย"; return out; }
@@ -721,7 +721,7 @@ function updateScan(modeChanged) {
   const line = (good, text) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge ${good ? "b-ok" : "b-bad"}" style="padding:4px 7px">${ic(good ? "check" : "x", 13, 3)}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(text)}</span></div>`;
   $("#p-ready").innerHTML = `<div class="stag">
     ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
-    ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? "เป็นโดเมนหน่วยงาน" : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : plan.reason || "อยู่นอกขอบเขต"))}
+    ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
     ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
     <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · อ่านอย่างเดียว ไม่ทำลายระบบ</div></div>`;
   $("#go").disabled = !ok;
@@ -826,12 +826,15 @@ async function viewScanning([id], alive) {
 
 /* ═══ view: results ════════════════════════════════════════════════════ */
 const R = { job: null, f: "all", q: "", sel: null, tab: "todo", swap: 0, tswap: 0 };
-const FILTERS = [["all", "ทุกเครื่อง", "#8A93C2"], ["urgent", "ต้องแก้ด่วน", "var(--crit-dot)"], ["fix", "ควรแก้ไข", "var(--warn-dot)"], ["ok", "ผ่าน", "var(--ok-dot)"], ["caution", "มีพอร์ตที่ควรระวัง", "#F2C063"]];
+const FILTERS = [["all", "ทุกเครื่อง", "#8A93C2"], ["urgent", "ต้องแก้ด่วน", "var(--crit-dot)"], ["fix", "ควรแก้ไข", "var(--warn-dot)"], ["ok", "ผ่าน", "var(--ok-dot)"], ["php", "เว็บ PHP", "#6D4AFF"], ["node", "เว็บ Node.js", "#0B7045"], ["caution", "มีพอร์ตที่ควรระวัง", "#F2C063"]];
 const services = (d) => (d.services && d.services.length ? d.services : d.open_ports.map((p) => ({ port: p, name: "HTTP", description: "เว็บ", note: null })));
-const hasFilter = (d, k) => k === "all" || (k === "urgent" && d.severity === "critical") || (k === "fix" && (d.severity === "high" || d.severity === "low")) || (k === "ok" && d.severity === "safe") || (k === "caution" && services(d).some((x) => x.note));
+const runtimeOf = (d) => d.runtime || (d.php_version ? `PHP ${d.php_version}` : (d.server || null));
+const isNode = (d) => /node/i.test(d.runtime || "");
+const isPHP = (d) => !!d.php_version || /php/i.test(d.runtime || "");
+const hasFilter = (d, k) => k === "all" || (k === "urgent" && d.severity === "critical") || (k === "fix" && (d.severity === "high" || d.severity === "low")) || (k === "ok" && d.severity === "safe") || (k === "php" && isPHP(d)) || (k === "node" && isNode(d)) || (k === "caution" && services(d).some((x) => x.note));
 function filteredDevices() {
   const q = R.q.trim().toLowerCase();
-  return R.job.devices.filter((d) => hasFilter(d, R.f) && (!q || [d.ip, d.hostname, d.mac, d.php_version, d.server, d.cms, d.device_type, devType(d.device_type),
+  return R.job.devices.filter((d) => hasFilter(d, R.f) && (!q || [d.ip, d.hostname, d.mac, d.php_version, d.runtime, d.server, d.cms, d.device_type, devType(d.device_type),
     ...services(d).flatMap((x) => [String(x.port), x.name]), ...d.findings.flatMap((f) => [f.title, ...f.cve])].join(" ").toLowerCase().includes(q)));
 }
 function todoFor(d) {
@@ -935,7 +938,7 @@ function paintList(fromFilter) {
   if (!R.sel && list[0]) R.sel = list[0].ip;
   $("#rows").innerHTML = list.length ? list.map((d) => `<button type="button" class="row" role="option" data-ip="${esc(d.ip)}" aria-selected="${d.ip === R.sel}">
       <span style="min-width:0;flex:1"><span class="ip">${esc(d.ip)}</span><span class="sub">${esc(d.hostname || devType(d.device_type))}</span></span>
-      <span class="more">${esc(d.php_version ? `PHP ${d.php_version}` : devType(d.device_type))}</span>${sevBadge(d.severity)}</button>`).join("")
+      <span class="more">${esc(runtimeOf(d) || devType(d.device_type))}</span>${sevBadge(d.severity)}</button>`).join("")
     : `<p style="margin:12px 6px;font-size:14px;color:var(--muted)">ไม่มีเครื่องที่ตรงกับเงื่อนไข · <button type="button" class="ghost" id="reset" style="min-height:44px;padding:0 4px">ล้างตัวกรอง</button></p>`;
   const reset = $("#reset");
   reset && reset.addEventListener("click", () => { R.f = "all"; R.q = ""; $("#q").value = ""; paintList(true); });
@@ -987,7 +990,7 @@ function paintHost() {
     <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">${cubeSvg(d)}
       <div style="flex:1;min-width:200px">${sevBadge(d.severity)}
         <div class="big" style="margin-top:6px">${esc(d.ip)}</div>
-        <div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(d.hostname || "ไม่มีชื่อโฮสต์")} · ${esc(devType(d.device_type))}</div></div></div>
+        <div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(d.hostname || "ไม่มีชื่อโฮสต์")} · ${esc(runtimeOf(d) || devType(d.device_type))}</div></div></div>
     <div style="display:flex;gap:12px;align-items:flex-start;margin-top:14px;padding:12px 14px;border-radius:16px;background:${s.bg};color:${s.fg}">
       <span style="flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;background:var(--grad)">1</span>
       <div style="min-width:0"><div style="font-size:12px;font-weight:700">${esc(s.title)} · ขั้นต่อไป</div><div style="font-size:14.5px;font-weight:600;line-height:1.55">${esc(todo[0])}</div></div></div>
@@ -1044,7 +1047,7 @@ function paintTabs() {
   } else {
     const kv = [["IP", d.ip, ""], ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
       ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นเฉพาะเครื่องในวง LAN เดียวกับเครื่องที่รัน thscan"], ["ประเภท", devType(d.device_type), "คาดเดาจากบริการที่เปิดอยู่ อาจไม่แม่นยำ 100%"],
-      ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
+      ["Runtime", runtimeOf(d) || "—", "ซอฟต์แวร์ที่ให้บริการเว็บ เช่น PHP, Node.js/Express หรือเว็บเซิร์ฟเวอร์ (nginx/Apache)"], ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
       ["CMS", d.cms || "—", ""], ["พอร์ตเว็บ", d.open_ports.join(", ") || "—", "พอร์ตที่ตอบกลับเป็นเว็บจริงระหว่างการสแกน"],
       ["เวลาตอบสนอง", d.latency_ms != null ? `${num(d.latency_ms)} ms` : "—", "เวลาที่เครื่องใช้ตอบกลับ ยิ่งน้อยยิ่งเร็ว"]];
     const headers = Object.entries(d.headers || {});
@@ -1116,8 +1119,8 @@ async function viewReport([id], alive) {
         ${act.map((d) => `<tr><td><b class="num">${esc(d.ip)}</b><br><span class="muted">${esc(d.hostname || "")}</span></td><td>${pill(d.severity)}</td><td class="num">${esc(d.php_version || "—")}</td><td>${esc(todoFor(d)[0])}</td></tr>`).join("")}</tbody></table></div>` : ""}
       ${watch.length ? `<h2>พอร์ตที่ควรตรวจสอบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>พอร์ต</th><th>ข้อแนะนำ</th></tr></thead><tbody>
         ${watch.map(({ d, x }) => `<tr><td class="num">${esc(d.ip)}</td><td><span class="badge b-warn">${x.port} · ${esc(x.name)}</span></td><td>${esc(x.note)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      ${j.devices.length ? `<h2>เครื่องทั้งหมดที่ตรวจพบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>IP</th><th>ชื่อโฮสต์</th><th>ประเภท</th><th>PHP</th><th>พอร์ตที่เปิด</th><th>ผล</th></tr></thead><tbody>
-        ${j.devices.map((d) => `<tr><td class="num">${esc(d.ip)}</td><td>${esc(d.hostname || "—")}</td><td>${esc(devType(d.device_type))}</td><td class="num">${esc(d.php_version || "—")}</td><td class="num">${esc(services(d).map((x) => x.port).join(", ") || "—")}</td><td>${pill(d.severity)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${j.devices.length ? `<h2>เครื่องทั้งหมดที่ตรวจพบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>IP</th><th>ชื่อโฮสต์</th><th>Runtime</th><th>พอร์ตที่เปิด</th><th>ผล</th></tr></thead><tbody>
+        ${j.devices.map((d) => `<tr><td class="num">${esc(d.ip)}</td><td>${esc(d.hostname || "—")}</td><td>${esc(devType(d.device_type))}</td><td>${esc(runtimeOf(d) || devType(d.device_type))}</td><td class="num">${esc(services(d).map((x) => x.port).join(", ") || "—")}</td><td>${pill(d.severity)}</td></tr>`).join("")}</tbody></table></div>` : ""}
       <h2>อ่านรายงานนี้อย่างไร</h2>
       <dl style="margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;font-size:13px;line-height:1.6">
         <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--crit-line)"><dt>${pill("critical")}</dt><dd style="margin:6px 0 0">ใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell ผู้ไม่หวังดีอาจสั่งงานเครื่องได้</dd></div>
@@ -1457,7 +1460,8 @@ function paintZTab() {
   $("#z-bar").style.transform = `translateX(${ids.indexOf(Z.tab) * 100}%)`;
   let html;
   if (Z.tab === "scope") {
-    html = `<p class="muted" style="font-size:13.5px;line-height:1.6">ช่วง IP ที่ระบบนี้สแกนได้ ผู้ติดตั้งตั้งไว้ใน <span class="mono">docker-compose.yml</span> (THSCAN_ALLOWED_CIDRS) — ตั้งใจให้แก้จากหน้านี้ไม่ได้ · การตรวจเว็บไซต์ใช้เกณฑ์ “โดเมนหน่วยงาน” แทน</p>
+    html = `<p class="notice ${cfg.enforce_scope ? "b-warn" : "b-ok"}" style="font-size:13px;margin-bottom:10px">${ic(cfg.enforce_scope ? "shield" : "check", 18)}<span>${cfg.enforce_scope ? "โหมดจำกัดขอบเขต: สแกนได้เฉพาะช่วง IP ด้านล่าง และเว็บไซต์โดเมนหน่วยงานเท่านั้น" : "โหมดเปิด: สแกนเป้าหมายใดก็ได้ที่กรอก (IP, ช่วง, หรือเว็บไซต์) ผู้ดูแลรับผิดชอบให้สแกนเฉพาะเครือข่ายที่ได้รับอนุญาต · ตั้ง THSCAN_ENFORCE_SCOPE=1 เพื่อบังคับขอบเขตตามรายการด้านล่าง"}</span></p>
+      <p class="muted" style="font-size:13.5px;line-height:1.6">ช่วง IP ตั้งค่าใน <span class="mono">docker-compose.yml</span> (THSCAN_ALLOWED_CIDRS)${cfg.enforce_scope ? " — จะถูกบังคับใช้" : " — ใช้เป็นค่าตั้งต้น/คำแนะนำเมื่ออยู่โหมดเปิด"}</p>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:10px;font-size:13.5px">
       ${(cfg.allowed_cidrs || []).map((c) => { const b = cidrBounds(c); return `<div style="padding:10px 12px;border-radius:12px;background:var(--bg)"><b class="num">${esc(c)}</b><br><span class="muted">${b ? `${num(b.bcast - b.net + 1)} ที่อยู่` : ""}</span></div>`; }).join("")}
       <div style="padding:10px 12px;border-radius:12px;background:var(--soft)"><b>โดเมนหน่วยงาน</b><br><span class="muted">${esc((cfg.gov_suffixes || []).join(" · "))}</span></div>

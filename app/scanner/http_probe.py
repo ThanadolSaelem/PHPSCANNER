@@ -23,6 +23,7 @@ class WebResult:
     powered_by: Optional[str] = None
     php_version: Optional[str] = None
     cms: Optional[str] = None
+    runtime: Optional[str] = None
     findings: List[Finding] = field(default_factory=list)
     headers: Dict[str, str] = field(default_factory=dict)
     # Stable shape of the response, used to recognise a middlebox (proxy /
@@ -110,6 +111,7 @@ async def _try(
         powered_by=merged.get("x-powered-by"),
         php_version=php_version,
         cms=cms,
+        runtime=vuln_rules.runtime_label(merged, body, php_version),
         findings=findings,
         headers=merged,
         fingerprint=response_fingerprint(resp.status_code, headers_lc),

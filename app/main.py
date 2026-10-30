@@ -56,6 +56,7 @@ async def get_config() -> dict:
         "max_concurrency": settings.max_concurrency,
         "allowed_cidrs": settings.allowed_cidrs,
         "gov_suffixes": settings.gov_suffixes,
+        "enforce_scope": settings.enforce_scope,
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
         "max_port_probes": settings.max_port_probes,
         "max_custom_ports": ports.MAX_CUSTOM_PORTS,
@@ -90,9 +91,13 @@ async def _resolve_sites(texts: list) -> list:
         try:
             site = await sites.resolve(sites.parse(text))
             item.update(host=site.host, ips=site.ips, port=site.port)
-            item["problems"] = sites.check(site, settings.gov_suffixes)
+            # the gov-domain rule is a hard block only when scope is enforced;
+            # otherwise it's advisory (we still record which suffix matched)
+            problems = sites.check(site, settings.gov_suffixes)
             item["suffix"] = site.suffix
-            item["refused"] = bool(item["problems"])
+            if settings.enforce_scope:
+                item["problems"] = problems
+                item["refused"] = bool(problems)
         except sites.SiteError as exc:
             item["problems"] = [str(exc)]
         out.append(item)
@@ -147,17 +152,19 @@ async def create_scan(req: ScanRequest) -> dict:
         _, total = expand_targets(req.targets, settings.max_targets)
     except TargetError as exc:
         raise HTTPException(400, str(exc))
-    # Website targets are authorised by their .go.th domain (checked above),
-    # not by the IP scope, so only directly-typed IP/CIDR targets are checked.
-    bad = out_of_scope(direct_targets, settings.allowed_networks())
-    if bad:
-        raise HTTPException(
-            403,
-            "เป้าหมายอยู่นอกขอบเขตที่อนุญาต (scope ที่ตั้งไว้ตอน deploy): "
-            + ", ".join(bad)
-            + " — อนุญาตเฉพาะ: "
-            + ", ".join(settings.allowed_cidrs),
-        )
+    # The IP scope is a hard limit only when THSCAN_ENFORCE_SCOPE is on. By
+    # default the operator may scan anything they type; website targets are
+    # never bound by the IP scope regardless.
+    if settings.enforce_scope:
+        bad = out_of_scope(direct_targets, settings.allowed_networks())
+        if bad:
+            raise HTTPException(
+                403,
+                "เป้าหมายอยู่นอกขอบเขตที่อนุญาต (scope ที่ตั้งไว้ตอน deploy): "
+                + ", ".join(bad)
+                + " — อนุญาตเฉพาะ: "
+                + ", ".join(settings.allowed_cidrs),
+            )
     try:
         scan_ports = ports.profile_ports(req.port_profile, req.custom_ports,
                                          sorted(set(settings.web_ports) | set(req.extra_web_ports)))
@@ -251,6 +258,7 @@ async def export_csv(job_id: str) -> Response:
             "mac",
             "device_type",
             "service",
+            "runtime",
             "php_version",
             "cms",
             "open_ports",
@@ -270,6 +278,7 @@ async def export_csv(job_id: str) -> Response:
                 d.mac or "",
                 d.device_type,
                 d.service,
+                d.runtime or "",
                 d.php_version or "",
                 d.cms or "",
                 " ".join(str(p) for p in d.open_ports),
@@ -330,9 +339,10 @@ def _validate_schedule(payload: ScheduleCreate) -> None:
         expand_targets(payload.targets, settings.max_targets)
     except TargetError as exc:
         raise HTTPException(400, str(exc))
-    bad = out_of_scope(payload.targets, settings.allowed_networks())
-    if bad:
-        raise HTTPException(403, f"เป้าหมายอยู่นอกขอบเขต: {', '.join(bad)}")
+    if settings.enforce_scope:
+        bad = out_of_scope(payload.targets, settings.allowed_networks())
+        if bad:
+            raise HTTPException(403, f"เป้าหมายอยู่นอกขอบเขต: {', '.join(bad)}")
     try:
         ports.profile_ports(payload.port_profile, payload.custom_ports, settings.web_ports)
     except ports.PortSpecError as exc:

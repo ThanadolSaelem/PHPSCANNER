@@ -97,6 +97,28 @@ def test_truly_static_site_stays_safe():
     assert vr.device_severity(findings) == Severity.safe
 
 
+def test_nodejs_detected_and_labelled():
+    findings, ver, _, _ = vr.evaluate(
+        scheme="https", headers={"server": "nginx", "x-powered-by": "Express",
+                                 "set-cookie": "connect.sid=x"}, body="<form>")
+    assert ver is None
+    node = next(f for f in findings if f.rule_id == "nodejs-detected")
+    assert node.severity == Severity.low and "Express" in node.title
+    assert vr.runtime_label({"x-powered-by": "Express"}) == "Node.js · Express"
+    assert vr.runtime_label({"server": "nginx", "x-powered-by": "PHP/8.3.10"}, php_version="8.3.10") == "PHP 8.3.10"
+    assert vr.runtime_label({"server": "nginx/1.29.8"}) == "nginx/1.29.8"
+
+
+def test_missing_headers_only_flags_real_apps():
+    # an app (has a session cookie) missing headers → flagged
+    app = vr.evaluate(scheme="https", headers={"server": "nginx", "x-powered-by": "Express",
+                                               "set-cookie": "s=1"}, body="")[0]
+    assert any(f.rule_id == "missing-security-headers" for f in app)
+    # a bare static page → not flagged
+    static = vr.evaluate(scheme="http", headers={"server": "nginx"}, body="<html>hi</html>")[0]
+    assert not any(f.rule_id == "missing-security-headers" for f in static)
+
+
 def test_device_severity_and_assessment():
     findings, *_ = vr.evaluate(scheme="https", headers={"x-powered-by": "PHP/8.3.10"}, body="")
     assert vr.device_severity(findings) == Severity.critical

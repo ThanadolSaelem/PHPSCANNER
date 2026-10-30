@@ -277,7 +277,83 @@ def evaluate(
             )
         )
 
+    # Node.js / Express is a risk surface too: flag it so the host isn't left
+    # as a bare "web server", and advise verifying the Node version + hiding the
+    # framework banner. (Node rarely exposes its version remotely, so this is a
+    # presence + hardening finding, not a version-matched CVE claim.)
+    low_pb = (powered_by or "").lower()
+    node_srv = bool(re.search(r"\bnode(?:\.js)?\b", (server or "").lower()))
+    fw = ("Express" if "express" in low_pb else "Next.js" if "next.js" in low_pb
+          else "Node.js" if node_srv or "node" in low_pb else None)
+    if fw and version is None:  # not a PHP box
+        findings.append(
+            Finding(
+                rule_id="nodejs-detected",
+                title=f"พบเซิร์ฟเวอร์ Node.js ({fw}) — ตรวจสอบเวอร์ชันและปิดการเปิดเผย framework",
+                severity=Severity.low,
+                confidence=Confidence.high,
+                description=f"เครื่องนี้ให้บริการด้วย {fw} (Node.js) การตรวจจากภายนอกอ่านเวอร์ชัน "
+                "ไม่ได้ ควรยืนยันบนเครื่องว่าใช้ Node.js รุ่น LTS ที่ยังได้รับแพตช์ความปลอดภัย",
+                evidence="; ".join(filter(None, [f"X-Powered-By: {powered_by}" if powered_by else "",
+                                                 f"Server: {server}" if node_srv else ""])) or fw,
+                recommendation="อัปเดต Node.js เป็น LTS ล่าสุด (เลี่ยงรุ่น EOL) · ปิด X-Powered-By "
+                "(ใน Express: app.disable('x-powered-by')) · อัปเดต dependency ด้วย `npm audit fix`",
+                cwe="CWE-1104",
+            )
+        )
+
+    # Baseline HTTP hardening — flag missing security headers only on an actual
+    # web app (a runtime, a session cookie, or a form), not on every static page,
+    # so it stays useful instead of marking the whole internet "ควรแก้ไข".
+    is_app = bool(seen or fw) or "set-cookie" in headers or "<form" in body[:_ERROR_SCAN].lower()
+    have = {k.lower() for k in headers}
+    missing = [name for header, name in (
+        ("x-content-type-options", "X-Content-Type-Options"),
+        ("x-frame-options", "X-Frame-Options / CSP frame-ancestors"),
+        ("content-security-policy", "Content-Security-Policy"),
+    ) if header not in have and not (header == "x-frame-options" and "content-security-policy" in have)]
+    if is_app and missing:
+        findings.append(
+            Finding(
+                rule_id="missing-security-headers",
+                title="ขาด HTTP security header พื้นฐาน",
+                severity=Severity.low,
+                confidence=Confidence.high,
+                description="เว็บแอปนี้ไม่ได้ตั้ง security header บางตัวที่ช่วยกัน clickjacking, MIME "
+                "sniffing และ XSS — ใช้ได้กับทั้งเว็บ PHP, Node.js และอื่น ๆ",
+                evidence="ขาด: " + ", ".join(missing),
+                recommendation="เพิ่ม: X-Content-Type-Options: nosniff, X-Frame-Options: DENY (หรือ "
+                "Content-Security-Policy ที่มี frame-ancestors), และตั้ง Content-Security-Policy",
+                cwe="CWE-693",
+            )
+        )
+
     return findings, (str(version) if version else None), cms, server
+
+
+def runtime_label(
+    headers: Dict[str, str], body: str = "", php_version: Optional[str] = None
+) -> str:
+    """A short human label for what serves this site, for the results list —
+    e.g. "PHP 8.2.35", "Node.js · Express", "nginx/1.29.8"."""
+    pb = headers.get("x-powered-by", "")
+    low = pb.lower()
+    server = headers.get("server", "")
+    if php_version:
+        return f"PHP {php_version}"
+    if "php" in low or php_signals(headers, body)[0]:
+        return "PHP (ซ่อนเวอร์ชัน)"
+    if "express" in low:
+        return "Node.js · Express"
+    if "next.js" in low:
+        return "Node.js · Next.js"
+    if re.search(r"\bnode(?:\.js)?\b", (server + " " + low)):
+        return "Node.js"
+    if "asp.net" in low:
+        return "ASP.NET"
+    if server:
+        return server
+    return "เว็บ (ไม่ทราบ runtime)"
 
 
 _ORDER = {

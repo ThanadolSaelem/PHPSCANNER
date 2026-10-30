@@ -231,6 +231,9 @@ _RAW_HOSTS: Dict[str, List[Dict[str, Any]]] = {
                 "server": "nginx",
                 "x-powered-by": "PHP/8.4.27",
                 "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
             },
             "body": '<meta name="generator" content="WordPress 6.6">',
         },
@@ -246,6 +249,9 @@ _RAW_HOSTS: Dict[str, List[Dict[str, Any]]] = {
                 "server": "nginx",
                 "x-powered-by": "PHP/8.3.36",
                 "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
                 "set-cookie": "laravel_session=secure; Path=/; Secure; HttpOnly",
             },
             "body": "<html><title>e-Document v2 (Patched)</title></html>",
@@ -293,8 +299,9 @@ def build_demo_devices(scenario_id: str, suffixes: List[str]) -> List[Device]:
             )
             severity = vuln_rules.device_severity(findings)
             service = "HTTPS" if has_tls else "HTTP"
+            runtime = vuln_rules.runtime_label(headers, body, php_ver)
         else:
-            findings, php_ver, cms, server = [], None, None, None
+            findings, php_ver, cms, server, runtime = [], None, None, None, None
             severity = Severity.safe
             service = "ไม่มีบริการเว็บ"
 
@@ -312,6 +319,7 @@ def build_demo_devices(scenario_id: str, suffixes: List[str]) -> List[Device]:
                 php_version=php_ver,
                 server=server,
                 cms=cms,
+                runtime=runtime,
                 open_ports=sorted(open_ports),
                 services=[
                     ServicePort(port=p, **ports.describe(p))

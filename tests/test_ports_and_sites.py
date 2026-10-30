@@ -75,7 +75,15 @@ def api(monkeypatch):
     monkeypatch.setattr(sites, "resolve", fake_resolve)
     monkeypatch.setattr(settings, "allowed_cidrs", ["10.0.0.0/8"])
     monkeypatch.setattr(settings, "gov_suffixes", ["go.th"])
+    monkeypatch.setattr(settings, "enforce_scope", True)  # enforcement-on tests
     return TestClient(main.app), created
+
+
+@pytest.fixture
+def open_api(api, monkeypatch):
+    """The default posture: no scope enforcement — scan anything typed."""
+    monkeypatch.setattr(settings, "enforce_scope", False)
+    return api
 
 
 def test_scan_by_link_uses_resolved_ip_and_host(api):
@@ -120,6 +128,21 @@ def test_resolve_preview(api):
     # a government domain outside the IP scope is not refused
     gov = client.get("/api/resolve", params={"q": "cdn.agency.go.th"}).json()["sites"][0]
     assert gov["refused"] is False and not gov["problems"]
+
+
+def test_open_mode_scans_anything(open_api):
+    # default posture: a non-gov domain and an out-of-scope IP are both allowed
+    client, created = open_api
+    assert client.post("/api/scans", json={"sites": ["shop.example.com"]}).status_code == 200
+    assert created[-1].targets == ["10.9.9.8"]
+    assert client.post("/api/scans", json={"targets": ["8.8.8.0/28"]}).status_code == 200
+    assert created[-1].targets == ["8.8.8.0/28"]
+
+
+def test_resolve_open_mode_never_refuses(open_api):
+    client, _ = open_api
+    res = client.get("/api/resolve", params={"q": "shop.example.com"}).json()["sites"][0]
+    assert res["refused"] is False and not res["problems"] and res["ips"] == ["10.9.9.8"]
 
 
 def test_port_profile_validation_and_budget(api, monkeypatch):

@@ -166,7 +166,7 @@ class ScanEngine:
 
                     findings = []
                     web_open: List[int] = []
-                    php_version = server = cms = None
+                    php_version = server = cms = runtime = None
                     merged_headers: Dict[str, str] = {}
                     seen_rules: set[str] = set()
                     # probe HTTP on every open port that isn't a known non-web
@@ -184,6 +184,7 @@ class ScanEngine:
                             continue  # the middlebox answered, not the host
                         web_open.append(port)
                         php_version = php_version or wr.php_version
+                        runtime = runtime or wr.runtime
                         server = server or wr.server
                         cms = cms or wr.cms
                         if not merged_headers and wr.headers:
@@ -214,7 +215,7 @@ class ScanEngine:
                     ip=ip, hostname=hostname, matched_suffix=matched_suffix, up=True,
                     mac=arp.get(ip),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
-                    service=service, php_version=php_version, server=server, cms=cms,
+                    service=service, php_version=php_version, server=server, cms=cms, runtime=runtime,
                     open_ports=sorted(web_open), services=services, latency_ms=latency,
                     severity=severity,
                     assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),

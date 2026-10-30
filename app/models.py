@@ -85,6 +85,7 @@ class Device(CompatBaseModel):
     php_version: Optional[str] = None
     server: Optional[str] = None
     cms: Optional[str] = None
+    runtime: Optional[str] = None  # human label: "PHP 8.2.35", "Node.js · Express", …
     open_ports: List[int] = Field(default_factory=list)  # web ports that answered HTTP
     services: List[ServicePort] = Field(default_factory=list)  # every open TCP port found
     latency_ms: Optional[int] = None

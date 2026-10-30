@@ -21,6 +21,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _env_list(name: str, default: List[str]) -> List[str]:
     val = os.environ.get(name)
     if not val:
@@ -71,6 +78,12 @@ class Settings:
             ["go.th", "or.th", "mi.th", "ac.th", "in.th"],
         )
     )
+    # When False (the default), the operator may scan any target they type —
+    # the deploy-time CIDR scope and the gov-domain rule become advisory labels,
+    # not hard blocks. Set THSCAN_ENFORCE_SCOPE=1 to re-impose them as limits.
+    # The operator is responsible for scanning only networks they are authorised
+    # to test; thscan stays non-destructive (read-only) either way.
+    enforce_scope: bool = _env_bool("THSCAN_ENFORCE_SCOPE", False)
     data_dir: str = field(default_factory=_default_data_dir)
 
     def allowed_networks(self) -> List[ipaddress.IPv4Network]:
