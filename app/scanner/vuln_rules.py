@@ -246,6 +246,17 @@ def evaluate(
         )
 
     if server and re.search(r"\d+\.\d+", server):
+        # tailor the advice to the software that actually answered, so a
+        # non-PHP box (e.g. a ZTE router UI) isn't told about expose_php
+        srv_l = server.lower()
+        if "apache" in srv_l:
+            how = "Apache: ตั้ง ServerTokens Prod และ ServerSignature Off"
+        elif "nginx" in srv_l:
+            how = "Nginx: ตั้ง server_tokens off"
+        elif seen:
+            how = "PHP: ตั้ง expose_php = Off และซ่อน Server header ที่เว็บเซิร์ฟเวอร์"
+        else:
+            how = "ปิดการแสดงเวอร์ชันในหน้าตั้งค่าของอุปกรณ์/เซิร์ฟเวอร์ (ถ้าทำได้) หรือซ่อนด้วย reverse proxy"
         findings.append(
             Finding(
                 rule_id="version-disclosure",
@@ -254,7 +265,7 @@ def evaluate(
                 confidence=Confidence.high,
                 description="Server header เปิดเผยเวอร์ชันซอฟต์แวร์ ทำให้ผู้โจมตีเลือก exploit ได้แม่นยำขึ้น",
                 evidence=f"Server: {server}",
-                recommendation="ตั้งค่าให้ซ่อนเวอร์ชัน (Apache: ServerTokens Prod, Nginx: server_tokens off, PHP: expose_php = Off)",
+                recommendation="ตั้งค่าให้ซ่อนเวอร์ชัน — " + how,
                 cvss=3.1,
                 cwe="CWE-200",
             )
