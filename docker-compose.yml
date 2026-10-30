@@ -9,9 +9,13 @@ services:
     volumes:
       - thscan-data:/data
     environment:
-      # --- Scope: the ONLY networks this instance may scan (deploy-time) ----
-      # Defaults to the private ranges. Set this to the subnet(s) your team is
-      # authorized to scan; anything outside it is refused by the API.
+      # --- Scope ------------------------------------------------------------
+      # By default (THSCAN_ENFORCE_SCOPE=0) you may scan ANY target you type —
+      # the list below is only the "detected subnets" hint and is NOT enforced.
+      # Set THSCAN_ENFORCE_SCOPE=1 to make it a hard limit: then only the CIDRs
+      # below (and government domains) may be scanned, everything else refused.
+      # You are responsible for scanning only networks you are authorised to.
+      THSCAN_ENFORCE_SCOPE: "0"
       THSCAN_ALLOWED_CIDRS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # --- Safety rails ----------------------------------------------------
       THSCAN_MAX_TARGETS: "65536"
