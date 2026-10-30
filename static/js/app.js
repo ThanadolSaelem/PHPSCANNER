@@ -949,8 +949,8 @@ function paintList(fromFilter) {
   if (fromFilter && !list.some((d) => d.ip === R.sel)) R.sel = list[0] ? list[0].ip : null;
   if (!R.sel && list[0]) R.sel = list[0].ip;
   $("#rows").innerHTML = list.length ? list.map((d) => `<button type="button" class="row" role="option" data-ip="${esc(d.ip)}" aria-selected="${d.ip === R.sel}">
-      <span style="min-width:0;flex:1"><span class="ip">${esc(d.ip)}</span><span class="sub">${esc(d.hostname || devType(d.device_type))}</span></span>
-      <span class="more">${esc(runtimeOf(d) || devType(d.device_type))}</span>${sevBadge(d.severity)}</button>`).join("")
+      <span style="min-width:0"><span class="ip">${esc(d.ip)}</span><span class="sub">${esc([d.hostname, runtimeOf(d) || devType(d.device_type)].filter(Boolean).join(" · "))}</span></span>
+      ${sevBadge(d.severity)}</button>`).join("")
     : `<p style="margin:12px 6px;font-size:14px;color:var(--muted)">ไม่มีเครื่องที่ตรงกับเงื่อนไข · <button type="button" class="ghost" id="reset" style="min-height:44px;padding:0 4px">ล้างตัวกรอง</button></p>`;
   const reset = $("#reset");
   reset && reset.addEventListener("click", () => { R.f = "all"; R.q = ""; $("#q").value = ""; paintList(true); });

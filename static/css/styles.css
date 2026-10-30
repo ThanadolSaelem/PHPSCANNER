@@ -243,15 +243,14 @@ button { cursor: pointer; }
 .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 14px; }
 .search input::placeholder { color: var(--muted); opacity: 1; }
 .rows { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; max-height: 620px; overflow-y: auto; }
-.row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 8px 12px; border: 1px solid transparent; border-radius: 14px; background: transparent; text-align: left; transition: background .25s, border-color .25s, transform .35s var(--ease); }
+.row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 8px 12px; border: 1px solid transparent; border-radius: 14px; background: transparent; text-align: left; transition: background .25s, border-color .25s, transform .35s var(--ease); }
 .row:hover { background: #F6F8FF; transform: translateX(3px); }
+.row > .badge { justify-self: end; }
 .row[aria-selected="true"] { background: var(--soft); border-color: #C9D5FA; }
 .row[aria-selected="true"]::before { content: ""; position: absolute; left: -1px; top: 12px; bottom: 12px; width: 4px; border-radius: 99px; background: linear-gradient(180deg, #2F5BEA, #6D4AFF); animation: grow .35s var(--ease) backwards; }
 @keyframes grow { from { transform: scaleY(0); } }
 .row .ip { display: block; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .row .sub { display: block; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .more { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; font-size: 12px; color: var(--muted); transition: max-width .4s var(--ease), opacity .3s; }
-.row:hover .more { max-width: 120px; opacity: 1; }
 .tabs { position: relative; display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
 .tab { min-height: 50px; padding: 6px 8px; border: 0; background: transparent; font-size: 14px; font-weight: 600; color: var(--muted); transition: color .25s; }
 .tab:hover { color: var(--blue-ink); }
