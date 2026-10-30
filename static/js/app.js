@@ -244,7 +244,7 @@ function checkTargets(specs) {
 }
 /* mirrors app/scanner/ports.py parse_ports → { n } or { error } */
 function countPorts(spec) {
-  const set = new Set(cfg.web_ports || []), max = cfg.max_custom_ports || 1024;
+  const set = new Set(), max = cfg.max_custom_ports || 1024;
   let any = false;
   for (const raw of String(spec).split(/[\s,;]+/)) {
     if (!raw) continue;
@@ -256,7 +256,7 @@ function countPorts(spec) {
     if (b - a + 1 > max) return { error: `ระบุพอร์ตได้ไม่เกิน ${num(max)} พอร์ต` };
     for (let p = a; p <= b; p++) set.add(p);
     any = true;
-    if (set.size > max + 8) return { error: `ระบุพอร์ตได้ไม่เกิน ${num(max)} พอร์ต` };
+    if (set.size > max) return { error: `ระบุพอร์ตได้ไม่เกิน ${num(max)} พอร์ต` };
   }
   return any ? { n: set.size } : { error: "ยังไม่ได้ระบุพอร์ต" };
 }
@@ -552,7 +552,7 @@ function parseIpTarget(text) {
 function useIpTarget(ip, port) {
   S.mode = "single"; S.single = ip.split(".");
   const web = cfg.web_ports || [];
-  if (port && !web.includes(port)) { S.profile = "custom"; S.custom = [...web, port].join(", "); }
+  if (port) { S.profile = "custom"; S.custom = String(port); }
   S.swap = 1 - S.swap;
   renderTargetPanel(); renderPortsPanel(); updateScan(true);
   shut($("#d-target"));
@@ -616,7 +616,7 @@ function renderTargetPanel() {
 }
 function renderPortsPanel() {
   $("#p-ports").innerHTML = `<div class="stag">
-    <div class="ptitle">ชุดพอร์ต ${tip("พอร์ตคือ “ช่องทาง” ที่บริการเปิดรับ ระบบลองเชื่อมต่อแบบปกติ (เหมือนโทรแล้ววาง) เพื่อดูว่าเปิดอะไรไว้ พอร์ตเว็บถูกตรวจเสมอ")}</div>
+    <div class="ptitle">ชุดพอร์ต ${tip("พอร์ตคือ “ช่องทาง” ที่บริการเปิดรับ ระบบลองเชื่อมต่อแบบปกติ (เหมือนโทรแล้ววาง) เพื่อดูว่าเปิดอะไรไว้ หากเลือกกำหนดเองจะตรวจเฉพาะพอร์ตที่ระบุเท่านั้น")}</div>
     ${profileOpts("data-profile", S.profile)}
     ${S.profile === "custom" ? `<label style="display:block;margin-top:10px"><span class="lbl">พอร์ตที่ต้องการ</span><input class="inp" id="custom-in" value="${esc(S.custom)}" autocomplete="off" spellcheck="false"></label>` : ""}
   </div>`;
