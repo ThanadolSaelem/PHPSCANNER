@@ -45,6 +45,8 @@ class ScanRequest(CompatBaseModel):
     # which ports to check on each online host: web | common | top100 | custom
     port_profile: str = "common"
     custom_ports: str = ""
+    # fast = pure-Python TCP connect (no deps); deep = nmap -sV + traceroute
+    scan_mode: str = "fast"
     concurrency: Optional[int] = None
     polite_delay_ms: Optional[int] = None
     note: str = Field("")
@@ -67,11 +69,18 @@ class Finding(CompatBaseModel):
     cwe: Optional[str] = None
 
 
+class RouteHop(CompatBaseModel):
+    hop: int
+    ip: Optional[str] = None     # None / "*" = no reply at this hop
+    rtt_ms: Optional[float] = None
+
+
 class ServicePort(CompatBaseModel):
     port: int
     name: str
     description: str = ""
     note: Optional[str] = None
+    product: Optional[str] = None  # deep mode: "Apache httpd 2.4.58" from nmap -sV
 
 
 class Device(CompatBaseModel):
@@ -86,6 +95,7 @@ class Device(CompatBaseModel):
     server: Optional[str] = None
     cms: Optional[str] = None
     runtime: Optional[str] = None  # human label: "PHP 8.2.35", "Node.js · Express", …
+    route: List["RouteHop"] = Field(default_factory=list)  # deep mode: traceroute path
     open_ports: List[int] = Field(default_factory=list)  # web ports that answered HTTP
     services: List[ServicePort] = Field(default_factory=list)  # every open TCP port found
     latency_ms: Optional[int] = None
@@ -146,6 +156,8 @@ class ScanJob(CompatBaseModel):
     demo_scenario: Optional[str] = None
     intercepted_ports: List[int] = Field(default_factory=list)
     scanned_ports: List[int] = Field(default_factory=list)
+    scan_mode: str = "fast"            # "fast" | "deep"
+    note_deep: Optional[str] = None    # why deep mode fell back, if it did
 
     def security_score(self) -> int:
         if not self.devices:

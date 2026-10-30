@@ -16,6 +16,7 @@ from .config import settings
 from .models import ScanRequest, ScheduleCreate
 from .scanner import demo_scenarios, discovery, netlimit, ports, sites
 from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
+from .scanner import nmap_scan
 from .scheduler import CronError, Scheduler, local_tz, parse_cron
 from .store import JobStore
 
@@ -57,6 +58,8 @@ async def get_config() -> dict:
         "allowed_cidrs": settings.allowed_cidrs,
         "gov_suffixes": settings.gov_suffixes,
         "enforce_scope": settings.enforce_scope,
+        "deep_available": nmap_scan.nmap_available(),
+        "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
         "max_port_probes": settings.max_port_probes,
         "max_custom_ports": ports.MAX_CUSTOM_PORTS,

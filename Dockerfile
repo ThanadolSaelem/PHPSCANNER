@@ -3,8 +3,11 @@ FROM python:3.13-slim AS base
 
 # dnsutils gives operators the familiar `nslookup`/`dig` on the shell too;
 # the scanner itself resolves via dnspython.
+# nmap + traceroute power "deep mode" (service/version detection + network
+# path). Both run as a TCP connect scan / UDP traceroute, so no root is needed;
+# fast mode still works with neither installed.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends dnsutils ca-certificates curl \
+    && apt-get install -y --no-install-recommends dnsutils ca-certificates curl nmap traceroute \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1 \

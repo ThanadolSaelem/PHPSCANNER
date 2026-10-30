@@ -355,7 +355,7 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, report: null, reportFor: "", detected: [] };
+  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", report: null, reportFor: "", detected: [] };
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
   ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์ของหน่วยงาน", "globe"],
@@ -467,7 +467,7 @@ async function viewScan(_, alive) {
   $("#go").addEventListener("click", async (e) => {
     const plan = scanPlan(), btn = e.currentTarget;
     btn.disabled = true;
-    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay }); }
+    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2 }); }
     catch (err) { toast(err.message); btn.disabled = false; }
   });
 
@@ -530,6 +530,10 @@ async function viewScan(_, alive) {
     if (e.target.id === "speed") S.speed = +e.target.value;
     if (e.target.id === "delay") S.delay = +e.target.value;
     renderAdvValues(); updateScan();
+  });
+  $("#p-adv").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-mode2]");
+    if (b && !b.disabled && b.dataset.mode2 !== S.mode2) { S.mode2 = b.dataset.mode2; renderAdvPanel(); updateScan(); }
   });
 }
 // A website-mode entry that is really an IP (optionally with a port), e.g.
@@ -618,7 +622,14 @@ function renderPortsPanel() {
   </div>`;
 }
 function renderAdvPanel() {
+  const deepOff = !cfg.deep_available;
   $("#p-adv").innerHTML = `<div class="stag">
+    <div class="ptitle">วิธีสแกน ${tip("เร็ว = เชื่อมต่อ TCP ด้วย Python ไม่ต้องติดตั้งอะไร · ลึก = ใช้ nmap อ่านชนิด/เวอร์ชันบริการ และ traceroute วาดเส้นทางเครือข่าย (ต้องติดตั้ง nmap ในเครื่อง)")}</div>
+    <div role="group" aria-label="วิธีสแกน" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">เร็ว</span><span class="od">TCP connect · ไม่ต้องติดตั้ง</span></span></button>
+      <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">ลึก (nmap)</span><span class="od">${deepOff ? "ยังไม่ได้ติดตั้ง nmap" : "อ่านเวอร์ชัน + traceroute"}</span></span></button>
+    </div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
     <label style="display:block"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">ความเร็ว ${tip("จำนวนการเชื่อมต่อพร้อมกัน ลดลงได้ถ้าเครือข่ายช้า หรือไม่อยากกระทบการใช้งาน")}</span><b style="color:var(--ink)" id="speed-v"></b></span>
       <input class="rng" id="speed" type="range" min="5" max="${cfg.max_concurrency}" step="5" value="${S.speed}" aria-label="ความเร็ว"></label>
     <label style="display:block;margin-top:10px"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">พักระหว่างเครื่อง ${tip("เว้นช่วงหลังตรวจแต่ละเครื่อง นุ่มนวลต่อเครือข่าย แต่ใช้เวลานานขึ้น")}</span><b style="color:var(--ink)" id="delay-v"></b></span>
@@ -707,7 +718,7 @@ function updateScan(modeChanged) {
   const pc = portCount(S.profile, S.custom);
   $("#sum-target").textContent = plan.summary;
   $("#sum-ports").textContent = pc.error ? "รูปแบบพอร์ตไม่ถูกต้อง" : `${(PROFILE_TEXT[S.profile] || [S.profile])[0]} · ${num(pc.n)} พอร์ต`;
-  $("#sum-adv").textContent = `${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`} · ${S.delay ? `พัก ${S.delay} ms` : "ไม่พัก"}`;
+  $("#sum-adv").textContent = `${S.mode2 === "deep" ? "โหมดลึก (nmap)" : "โหมดเร็ว"} · ${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`}`;
   // readiness: the button is enabled only when the server would accept the request
   const budgetOk = !pc.error && plan.count * pc.n <= cfg.max_port_probes;
   const ok = plan.valid && plan.scoped && !plan.pending && !pc.error && budgetOk;
@@ -863,7 +874,7 @@ function renderResults() {
   <div class="page-head in1">
     <div class="sec" style="min-width:0">
       <p style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:13px;color:var(--muted)">
-        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
+        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}${j.scan_mode === "deep" ? `<span class="badge b-ok">${ic("search",12,2.6)} โหมดลึก · nmap</span>` : ""}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
         ${tip(`${demo ? "ผลจากข้อมูลจำลอง ไม่ได้ส่งสัญญาณไปที่เครือข่ายใด · " : ""}${portsChecked(j)}ใช้เวลา ${fmtDuration(j.duration_s)}`)}</p>
       <h1 class="h1" style="margin-top:8px">${headline}</h1>
     </div>
@@ -878,6 +889,7 @@ function renderResults() {
   </div>
   ${j.state === "cancelled" ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>การสแกนนี้ถูกหยุดก่อนเสร็จ ผลอาจไม่ครบทุกเครื่อง</span></p>` : ""}
   ${j.state === "failed" ? `<p class="notice b-bad in1" style="margin-top:14px">${ic("alert", 20)}<span>การสแกนผิดพลาด: ${esc(j.error || "ไม่ทราบสาเหตุ")}</span></p>` : ""}
+  ${j.note_deep ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>${esc(j.note_deep)}</span></p>` : ""}
   ${(j.intercepted_ports || []).length ? `<p class="notice b-blue in1" style="margin-top:14px">${ic("shield", 20)}<span>พบอุปกรณ์กลางทาง (เช่น proxy หรือ firewall) ตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(j.intercepted_ports.join(", "))}</span> — ระบบตัดเครื่องที่ไม่มีอยู่จริงออกให้แล้ว</span></p>` : ""}
   <dl class="card stats in2" style="margin-top:16px;margin-bottom:0">
     <div class="stat sec"><dt class="muted">ออนไลน์ ${tip("เครื่องที่ตอบรับการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง")}</dt><dd style="color:var(--blue-ink)"><span class="cnt" data-to="${j.devices.length}">0</span><small> / ${num(j.progress.total_ips)}</small></dd></div>
@@ -905,7 +917,7 @@ function renderResults() {
   rescan && rescan.addEventListener("click", async () => {
     rescan.disabled = true;
     const r = j.request || {};
-    const base = { port_profile: r.port_profile, custom_ports: r.custom_ports };
+    const base = { port_profile: r.port_profile, custom_ports: r.custom_ports, scan_mode: r.scan_mode };
     try { await startScan(r.sites && r.sites.length ? { ...base, sites: r.sites } : { ...base, targets: r.targets }); }
     catch (err) { toast(err.message); rescan.disabled = false; }
   });
@@ -1041,7 +1053,7 @@ function paintTabs() {
       ${f.evidence ? `<div class="evidence">${esc(f.evidence)}</div>` : ""}</article>`).join("") : `<p style="font-size:14px;font-weight:600;color:var(--ok)">✓ ไม่พบปัญหาบนเครื่องนี้</p>`;
   else if (R.tab === "ports") {
     const svc = services(d);
-    html = svc.length ? `<ul class="ports">${svc.map((x) => `<li class="port ${x.note ? "warn" : ""}"><span class="pnum">${x.port}</span><span style="min-width:0"><span class="ot">${esc(x.name)}</span><span class="od">${esc(x.description || "")}</span>${x.note ? `<span class="od" style="margin-top:3px;font-weight:600;color:var(--warn)">ควรระวัง: ${esc(x.note)}</span>` : ""}</span></li>`).join("")}</ul>
+    html = svc.length ? `<ul class="ports">${svc.map((x) => `<li class="port ${x.note ? "warn" : ""}"><span class="pnum">${x.port}</span><span style="min-width:0"><span class="ot">${esc(x.name)}</span><span class="od">${esc(x.description || "")}</span>${x.product ? `<span class="od" style="margin-top:2px;color:var(--blue-ink)">${ic("search",11,2.4)} ${esc(x.product)}</span>` : ""}${x.note ? `<span class="od" style="margin-top:3px;font-weight:600;color:var(--warn)">ควรระวัง: ${esc(x.note)}</span>` : ""}</span></li>`).join("")}</ul>
       <p class="sec" style="margin-top:10px;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px">พอร์ตที่ควรระวังไม่ใช่ช่องโหว่ และไม่ลดคะแนน ${tip("พอร์ตที่เปิดอยู่อาจจำเป็นต่อการใช้งาน ระบบแค่เตือนให้ตรวจดูว่าควรจำกัดผู้เข้าถึงหรือไม่")}</p>`
       : `<p class="muted" style="font-size:14px">ไม่พบพอร์ตที่เปิด${(R.job.scanned_ports || []).length ? ` จาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ` : ""}</p>`;
   } else {
@@ -1052,7 +1064,9 @@ function paintTabs() {
       ["เวลาตอบสนอง", d.latency_ms != null ? `${num(d.latency_ms)} ms` : "—", "เวลาที่เครื่องใช้ตอบกลับ ยิ่งน้อยยิ่งเร็ว"]];
     const headers = Object.entries(d.headers || {});
     html = `<dl class="kv">${kv.map(([k, v, h]) => `<div class="sec"><dt>${k}${h ? ` ${tip(h)}` : ""}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
-      ${headers.length ? `<details class="raw"><summary>ดู header ที่เว็บตอบกลับ (สำหรับเจ้าหน้าที่เทคนิค)</summary><div class="evidence">${esc(headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</div></details>` : ""}`;
+      ${headers.length ? `<details class="raw"><summary>ดู header ที่เว็บตอบกลับ (สำหรับเจ้าหน้าที่เทคนิค)</summary><div class="evidence">${esc(headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</div></details>` : ""}
+      ${(d.route && d.route.length) ? `<div class="sec" style="margin-top:12px"><div class="lbl">เส้นทางเครือข่าย (traceroute) ${tip("ลำดับอุปกรณ์ (hop) ที่แพ็กเก็ตวิ่งผ่านกว่าจะถึงเครื่องนี้ · * = hop นั้นไม่ตอบ")}</div>
+        <ol style="list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px">${d.route.map((h) => `<li style="display:flex;align-items:center;gap:10px;font-size:13px"><span class="pnum" style="min-width:34px">${h.hop}</span><span class="mono" style="flex:1">${esc(h.ip || "* (ไม่ตอบ)")}</span><span class="muted">${h.rtt_ms != null ? h.rtt_ms + " ms" : ""}</span></li>`).join("")}</ol></div>` : ""}`;
   }
   const panel = $("#tabpanel");
   panel.className = `tabpanel swap${R.tswap}`;

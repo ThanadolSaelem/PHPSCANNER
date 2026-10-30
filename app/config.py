@@ -84,6 +84,7 @@ class Settings:
     # The operator is responsible for scanning only networks they are authorised
     # to test; thscan stays non-destructive (read-only) either way.
     enforce_scope: bool = _env_bool("THSCAN_ENFORCE_SCOPE", False)
+    traceroute_max: int = _env_int("THSCAN_TRACEROUTE_MAX", 16)
     data_dir: str = field(default_factory=_default_data_dir)
 
     def allowed_networks(self) -> List[ipaddress.IPv4Network]:

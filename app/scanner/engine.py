@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Dict, List
 
 from ..config import Settings
-from ..models import Device, JobState, ScanJob, ServicePort, Severity
-from . import demo_scenarios, discovery, dns_resolver, http_probe, port_scanner, ports, vuln_rules
+from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity
+from . import demo_scenarios, discovery, dns_resolver, http_probe, nmap_scan, port_scanner, ports, vuln_rules
 from .ip_utils import expand_targets, label_targets
 
 
@@ -97,6 +98,7 @@ class ScanEngine:
         web_ports = sorted(set(s.web_ports) | set(req.extra_web_ports))
         scan_ports = ports.profile_ports(req.port_profile, req.custom_ports, web_ports)
         job.scanned_ports = scan_ports
+        job.scan_mode = "deep" if req.scan_mode == "deep" else "fast"
         # A host counts as "online" if ANY port we're going to scan answers, so
         # the chosen port profile actually finds hosts (e.g. a box whose only
         # open port is MySQL/3306) instead of only adding detail to hosts that
@@ -105,6 +107,17 @@ class ScanEngine:
         live_ports = list(dict.fromkeys(scan_ports + s.liveness_ports))
         resolver = dns_resolver.ReverseResolver(timeout=1.5)
         devices: List[Device] = []
+
+        # Deep mode: one nmap -sV pass over all targets for service/version
+        # breadth (falls back to the fast path if nmap isn't installed).
+        deep = req.scan_mode == "deep" and nmap_scan.nmap_available()
+        nmap_map: Dict[str, nmap_scan.NmapHost] = {}
+        if deep:
+            budget = min(900.0, 60.0 + 0.15 * total * len(scan_ports))
+            nmap_map = await nmap_scan.run_nmap(req.targets, scan_ports, timeout=budget)
+            if not nmap_map:
+                job.note_deep = "nmap ไม่คืนผล (หมดเวลาหรือไม่พบเครื่อง) — ใช้วิธีเชื่อมต่อ TCP แทน"
+                deep = False
 
         async with http_probe.build_client(s.http_timeout, s.connect_timeout) as client:
             # Phase 0: is a proxy/firewall answering for every address?
@@ -125,6 +138,16 @@ class ScanEngine:
 
             async def liveness(ip: str) -> None:
                 if cancel.is_set():
+                    return
+                if deep:
+                    host = nmap_map.get(ip)
+                    up = bool(host and host.ports)
+                    latency = None
+                    verified = up
+                    job.progress.probed += 1
+                    if up:
+                        live.append((ip, latency, verified))
+                        job.progress.online += 1
                     return
                 async with sem:
                     up, latency = await discovery.alive_latency(ip, clean_ports, s.connect_timeout)
@@ -159,10 +182,15 @@ class ScanEngine:
                         lookup = asyncio.sleep(0, (ip, site_host, dns_resolver.match_suffix(site_host, s.gov_suffixes)))
                     else:
                         lookup = resolver.resolve_and_match(ip, s.gov_suffixes)
-                    open_all, (_, hostname, matched_suffix) = await asyncio.gather(
-                        port_scanner.open_ports(ip, scan_ports, s.connect_timeout),
-                        lookup,
-                    )
+                    if deep:
+                        host = nmap_map.get(ip)
+                        open_all = sorted(host.ports) if host else []
+                        _, hostname, matched_suffix = await lookup
+                    else:
+                        open_all, (_, hostname, matched_suffix) = await asyncio.gather(
+                            port_scanner.open_ports(ip, scan_ports, s.connect_timeout),
+                            lookup,
+                        )
 
                     findings = []
                     web_open: List[int] = []
@@ -205,11 +233,40 @@ class ScanEngine:
                 # ports a middlebox answers for prove nothing; keep them only
                 # when a genuine web response came back on them
                 found = sorted({p for p in open_all if p not in blocked} | set(web_open))
-                services = [ServicePort(port=p, **ports.describe(p, web=p in web_open)) for p in found]
+                nhost = nmap_map.get(ip) if deep else None
+                services = []
+                for p in found:
+                    sp = ServicePort(port=p, **ports.describe(p, web=p in web_open))
+                    np = nhost.ports.get(p) if nhost else None
+                    if np:
+                        if np.name and (sp.name == "ไม่ทราบ" or not (p in web_open)):
+                            sp.name = np.name.upper() if len(np.name) <= 5 else np.name
+                        sp.product = np.label() or None
+                    services.append(sp)
+                # deep mode: nmap -sV can read PHP even when our header probe
+                # could not — use it so the PHP2Shell check still runs
+                if nhost and not php_version:
+                    for np in nhost.ports.values():
+                        m = re.search(r"PHP[/ ]?(\d+\.\d+\.\d+)", f"{np.extra} {np.version} {np.product}")
+                        if m:
+                            php_version = m.group(1)
+                            runtime = runtime or f"PHP {php_version}"
+                            verdict = vuln_rules.assess_php2shell(
+                                vuln_rules.parse_php_version(f"PHP/{php_version}"), True)
+                            if verdict and verdict.vulnerable and "php2shell" not in seen_rules:
+                                findings.append(Finding(
+                                    rule_id="php2shell", title="PHP2Shell — unauthenticated RCE in PHP core",
+                                    severity=Severity.critical, confidence=Confidence.high,
+                                    description="PHP2Shell (CVSS 9.2) " + verdict.detail + " (ตรวจพบเวอร์ชันด้วย nmap -sV)",
+                                    evidence=f"nmap: PHP {php_version} บนพอร์ต {np.port}",
+                                    recommendation="อัปเดต PHP เป็น 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 ขึ้นไป",
+                                    cve=list(vuln_rules.PHP2SHELL_CVES), cvss=9.2, cwe="CWE-787"))
+                                seen_rules.add("php2shell")
+                            break
                 has_web = bool(web_open)
                 has_tls = any(p in (443, 8443) for p in web_open)
                 other_open = [p for p in found if p not in web_ports]
-                severity = vuln_rules.device_severity(findings) if has_web else Severity.safe
+                severity = vuln_rules.device_severity(findings) if (has_web or findings) else Severity.safe
                 service = ("HTTPS" if has_tls else "HTTP") if has_web else "ไม่มีบริการเว็บ"
                 devices.append(Device(
                     ip=ip, hostname=hostname, matched_suffix=matched_suffix, up=True,
@@ -225,6 +282,21 @@ class ScanEngine:
                     job.progress.risks += 1
 
             await asyncio.gather(*(inspect(ip, lat, ver) for ip, lat, ver in live))
+
+            # Deep mode: map the network path to a capped number of live hosts
+            if deep and devices and nmap_scan.traceroute_available() and not cancel.is_set():
+                job.progress.phase = "traceroute"
+                cap = getattr(s, "traceroute_max", 16)
+                tr_sem = asyncio.Semaphore(min(8, concurrency))
+
+                async def trace(dev: Device) -> None:
+                    if cancel.is_set():
+                        return
+                    async with tr_sem:
+                        hops = await nmap_scan.run_traceroute(dev.ip)
+                    dev.route = [RouteHop(hop=h["hop"], ip=h["ip"], rtt_ms=h["rtt_ms"]) for h in hops]
+
+                await asyncio.gather(*(trace(d) for d in devices[:cap]))
 
         order = {
             Severity.critical: 0,
