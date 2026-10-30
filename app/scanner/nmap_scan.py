@@ -144,7 +144,10 @@ async def run_nmap(targets: List[str], ports: List[int], timeout: float = 240.0,
     if not targets or not ports or not nmap_available():
         return {}
     port_spec = ",".join(str(p) for p in sorted(set(ports)))
+    # --host-timeout caps time per host so one slow/filtered target can't stall
+    # the whole run; --max-retries keeps probes bounded on lossy links.
     argv = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-T4",
+            "--host-timeout", "120s", "--max-retries", "2",
             "-p", port_spec, "-oX", "-", *(extra_args or []), *targets]
     xml = await _run(argv, timeout)
     return parse_nmap_xml(xml) if xml else {}

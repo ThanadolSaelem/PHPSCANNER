@@ -112,3 +112,36 @@ async def test_deep_mode_falls_back_when_nmap_missing(monkeypatch, tmp_path):
     job = ScanJob(id="f", created_at=datetime.now(timezone.utc), request=req)
     await eng.ScanEngine(s).run(job, asyncio.Event())
     assert job.state.value == "completed"  # ran via the fast path, no crash
+    # the badge must not claim "deep" when it ran fast; the note explains why
+    assert job.scan_mode == "fast" and job.note_deep and "nmap" in job.note_deep
+
+
+async def test_deep_falls_back_when_nmap_returns_nothing(monkeypatch, tmp_path):
+    from app.scanner import discovery, engine as eng, http_probe, port_scanner
+
+    async def none_set(*a, **k):
+        return set()
+
+    async def fake_alive(ip, ports_, timeout):
+        return False, None
+
+    async def fake_open(ip, ports_, timeout):
+        return []
+
+    async def empty_nmap(targets, ports, timeout=240.0, extra_args=None):
+        return {}  # nmap ran but found nothing (timeout / egress blocked)
+
+    monkeypatch.setattr(discovery, "intercepted_ports", none_set)
+    monkeypatch.setattr(discovery, "alive_latency", fake_alive)
+    monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(port_scanner, "open_ports", fake_open)
+    monkeypatch.setattr(nmap_scan, "nmap_available", lambda: True)
+    monkeypatch.setattr(nmap_scan, "run_nmap", empty_nmap)
+
+    s = Settings(); s.web_ports = [80]; s.liveness_ports = []; s.data_dir = str(tmp_path)
+    req = ScanRequest(targets=["10.0.0.9"], port_profile="web", scan_mode="deep")
+    job = ScanJob(id="e", created_at=datetime.now(timezone.utc), request=req)
+    await eng.ScanEngine(s).run(job, asyncio.Event())
+    assert job.state.value == "completed"
+    assert job.scan_mode == "fast"          # fell back → badge says fast
+    assert job.note_deep and "ถอยไปใช้โหมดเร็ว" in job.note_deep

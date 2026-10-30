@@ -98,7 +98,6 @@ class ScanEngine:
         web_ports = sorted(set(s.web_ports) | set(req.extra_web_ports))
         scan_ports = ports.profile_ports(req.port_profile, req.custom_ports, web_ports)
         job.scanned_ports = scan_ports
-        job.scan_mode = "deep" if req.scan_mode == "deep" else "fast"
         # A host counts as "online" if ANY port we're going to scan answers, so
         # the chosen port profile actually finds hosts (e.g. a box whose only
         # open port is MySQL/3306) instead of only adding detail to hosts that
@@ -111,13 +110,19 @@ class ScanEngine:
         # Deep mode: one nmap -sV pass over all targets for service/version
         # breadth (falls back to the fast path if nmap isn't installed).
         deep = req.scan_mode == "deep" and nmap_scan.nmap_available()
+        if req.scan_mode == "deep" and not deep:
+            job.note_deep = "เครื่องนี้ยังไม่ได้ติดตั้ง nmap — ใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน"
         nmap_map: Dict[str, nmap_scan.NmapHost] = {}
         if deep:
-            budget = min(900.0, 60.0 + 0.15 * total * len(scan_ports))
+            budget = min(1800.0, 120.0 + 0.3 * total * len(scan_ports))
             nmap_map = await nmap_scan.run_nmap(req.targets, scan_ports, timeout=budget)
             if not nmap_map:
-                job.note_deep = "nmap ไม่คืนผล (หมดเวลาหรือไม่พบเครื่อง) — ใช้วิธีเชื่อมต่อ TCP แทน"
+                job.note_deep = ("nmap ไม่คืนผล (หมดเวลา เป้าหมายบล็อก หรือเครือข่ายที่รัน thscan "
+                                 "ออกไปหา nmap ไม่ได้) — ถอยไปใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน")
                 deep = False
+        # record the mode that actually ran, so the result badge doesn't claim
+        # "deep · nmap" when it fell back to the TCP connect path
+        job.scan_mode = "deep" if deep else "fast"
 
         async with http_probe.build_client(s.http_timeout, s.connect_timeout) as client:
             # Phase 0: is a proxy/firewall answering for every address?
