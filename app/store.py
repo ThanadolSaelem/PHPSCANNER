@@ -83,6 +83,7 @@ class JobStore:
             created_at=datetime.now(timezone.utc),
             request=request,
             demo_scenario=request.demo_scenario,
+            scan_mode=request.scan_mode,
         )
         cancel = asyncio.Event()
         async with self._lock:

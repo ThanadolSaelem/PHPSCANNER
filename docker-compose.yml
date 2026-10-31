@@ -6,6 +6,8 @@ services:
     # host networking so auto-detect and scans see your real LAN (Linux hosts).
     # On Docker Desktop (Windows/macOS) use run.bat / run.sh instead.
     network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - thscan-data:/data
     environment:
@@ -23,6 +25,10 @@ services:
       THSCAN_CONNECT_TIMEOUT: "3.5"
       THSCAN_HTTP_TIMEOUT: "8"
       THSCAN_POLITE_DELAY_MS: "0"
+      # Full chain is enabled only for the isolated host.docker.internal lab.
+      THSCAN_ENABLE_RCE_CHAIN: "1"
+      THSCAN_RCE_CHAIN_ALLOWED_HOSTS: "host.docker.internal"
+      THSCAN_RCE_CHAIN_TIMEOUT_S: "240"
       THSCAN_WEB_PORTS: "80,443,8080,8443"
       THSCAN_LIVENESS_PORTS: "22,445,3389,53"
       # Local time used for scheduled scans and for dates shown in the UI.

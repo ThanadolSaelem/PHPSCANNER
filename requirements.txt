@@ -7,3 +7,4 @@ dnspython==2.9.0
 pydantic==2.14.1
 PyYAML==6.0.3
 tzdata==2026.6
+security-audit-toolkit[full] @ https://github.com/CybersRMUTL/security-audit-toolkit/archive/refs/tags/v6.3.0.zip

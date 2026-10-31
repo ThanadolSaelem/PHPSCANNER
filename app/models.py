@@ -45,8 +45,12 @@ class ScanRequest(CompatBaseModel):
     # which ports to check on each online host: web | common | top100 | custom
     port_profile: str = "common"
     custom_ports: str = ""
-    # fast = pure-Python TCP connect (no deps); deep = nmap -sV + traceroute
+    # fast = TCP connect; deep = nmap; chain = toolkit scan + active verification
     scan_mode: str = "fast"
+    # The operator explicitly acknowledges active verification before chain mode.
+    rce_chain_confirmed: bool = False
+    # Set by the API after enforcing the configured chain hostname allowlist.
+    chain_target_url: Optional[str] = None
     concurrency: Optional[int] = None
     polite_delay_ms: Optional[int] = None
     note: str = Field("")
@@ -150,13 +154,14 @@ class ScanJob(CompatBaseModel):
     target_label: str = ""
     progress: ScanProgress = Field(default_factory=ScanProgress)
     devices: List[Device] = Field(default_factory=list)
+    chain_result: Optional[Dict[str, Any]] = None
     duration_s: Optional[float] = None
     workers: int = 0
     error: Optional[str] = None
     demo_scenario: Optional[str] = None
     intercepted_ports: List[int] = Field(default_factory=list)
     scanned_ports: List[int] = Field(default_factory=list)
-    scan_mode: str = "fast"            # "fast" | "deep"
+    scan_mode: str = "fast"            # "fast" | "deep" | "chain"
     note_deep: Optional[str] = None    # why deep mode fell back, if it did
 
     def security_score(self) -> int:
@@ -202,6 +207,7 @@ class ScanJob(CompatBaseModel):
             "risks": sum(1 for d in self.devices if d.severity != Severity.safe),
             "php_servers": php_servers,
             "target_label": self.target_label,
+            "scan_mode": self.scan_mode,
             "duration_s": self.duration_s,
             "workers": self.workers,
             "note": self.request.note,

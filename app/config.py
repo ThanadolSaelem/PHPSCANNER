@@ -85,6 +85,14 @@ class Settings:
     # to test; thscan stays non-destructive (read-only) either way.
     enforce_scope: bool = _env_bool("THSCAN_ENFORCE_SCOPE", False)
     traceroute_max: int = _env_int("THSCAN_TRACEROUTE_MAX", 16)
+    rce_chain_enabled: bool = _env_bool("THSCAN_ENABLE_RCE_CHAIN", False)
+    rce_chain_allowed_hosts: List[str] = field(
+        default_factory=lambda: [
+            host.lower().rstrip(".")
+            for host in _env_list("THSCAN_RCE_CHAIN_ALLOWED_HOSTS", ["host.docker.internal"])
+        ]
+    )
+    rce_chain_timeout_s: int = _env_int("THSCAN_RCE_CHAIN_TIMEOUT_S", 240)
     data_dir: str = field(default_factory=_default_data_dir)
 
     def allowed_networks(self) -> List[ipaddress.IPv4Network]:

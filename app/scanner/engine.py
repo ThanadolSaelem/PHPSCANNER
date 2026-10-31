@@ -8,7 +8,7 @@ from typing import Dict, List
 
 from ..config import Settings
 from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity
-from . import demo_scenarios, discovery, dns_resolver, http_probe, nmap_scan, port_scanner, ports, vuln_rules
+from . import chain_runner, demo_scenarios, discovery, dns_resolver, http_probe, nmap_scan, port_scanner, ports, vuln_rules
 from .ip_utils import expand_targets, label_targets
 
 
@@ -110,22 +110,30 @@ class ScanEngine:
         resolver = dns_resolver.ReverseResolver(timeout=1.5)
         devices: List[Device] = []
 
-        # Deep mode: one nmap -sV pass over all targets for service/version
-        # breadth (falls back to the fast path if nmap isn't installed).
-        deep = req.scan_mode == "deep" and nmap_scan.nmap_available()
-        if req.scan_mode == "deep" and not deep:
-            job.note_deep = "เครื่องนี้ยังไม่ได้ติดตั้ง nmap — ใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน"
+        # Deep and chain modes share Nmap service discovery when available.
+        # The chain pipeline still runs if Nmap is absent or returns no hosts.
+        deep_requested = req.scan_mode in {"deep", "chain"}
+        deep = deep_requested and nmap_scan.nmap_available()
+        if deep_requested and not deep:
+            job.note_deep = (
+                "ไม่มี nmap — โหมด chain จะใช้ TCP discovery ก่อนทำ toolkit"
+                if req.scan_mode == "chain"
+                else "เครื่องนี้ยังไม่ได้ติดตั้ง nmap — ใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน"
+            )
         nmap_map: Dict[str, nmap_scan.NmapHost] = {}
         if deep:
             budget = min(1800.0, 120.0 + 0.3 * total * len(scan_ports))
             nmap_map = await nmap_scan.run_nmap(req.targets, scan_ports, timeout=budget)
             if not nmap_map:
-                job.note_deep = ("nmap ไม่คืนผล (หมดเวลา เป้าหมายบล็อก หรือเครือข่ายที่รัน thscan "
-                                 "ออกไปหา nmap ไม่ได้) — ถอยไปใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน")
+                job.note_deep = (
+                    "nmap ไม่คืนผล (หมดเวลา เป้าหมายบล็อก หรือเครือข่ายที่รัน thscan "
+                    "ออกไปหา nmap ไม่ได้) — ใช้ TCP discovery แทน"
+                )
                 deep = False
-        # record the mode that actually ran, so the result badge doesn't claim
-        # "deep · nmap" when it fell back to the TCP connect path
-        job.scan_mode = "deep" if deep else "fast"
+        # Keep chain mode visible even when Nmap falls back to TCP discovery.
+        job.scan_mode = (
+            "chain" if req.scan_mode == "chain" else ("deep" if deep else "fast")
+        )
 
         async with http_probe.build_client(s.http_timeout, s.connect_timeout) as client:
             # Phase 0: is a proxy/firewall answering for every address?
@@ -309,6 +317,84 @@ class ScanEngine:
                     dev.route = [RouteHop(hop=h["hop"], ip=h["ip"], rtt_ms=h["rtt_ms"]) for h in hops]
 
                 await asyncio.gather(*(trace(d) for d in devices[:cap]))
+
+        if req.scan_mode == "chain" and not cancel.is_set():
+            job.progress.phase = "chain"
+            job.progress.to_inspect = 1
+            job.progress.inspected = 0
+            target_ip = ips[0]
+            target_url = req.chain_target_url or req.sites[0]
+            chain_result = await chain_runner.run_chain(
+                s, job.id, target_url, target_ip, cancel
+            )
+            job.chain_result = chain_result
+            if cancel.is_set():
+                return
+
+            device = next((item for item in devices if item.ip == target_ip), None)
+            if device is None and chain_result.get("reachable"):
+                php_version = chain_result.get("php_version") or None
+                device = Device(
+                    ip=target_ip,
+                    hostname=req.site_hosts.get(target_ip),
+                    up=True,
+                    device_type="Web Server",
+                    service="HTTP",
+                    server=chain_result.get("server") or None,
+                    php_version=php_version,
+                    runtime=f"PHP {php_version}" if php_version else None,
+                    severity=Severity.safe,
+                    assessment="พบเว็บที่ตอบสนองจากการตรวจแบบ chain",
+                )
+                devices.append(device)
+                job.progress.online = max(job.progress.online, 1)
+
+            if device is not None:
+                seen_chain_rules = {finding.rule_id for finding in device.findings}
+                for item in chain_result.get("findings", []):
+                    if not item.get("risk"):
+                        continue
+                    cve = str(item.get("cve") or "unknown")
+                    rule_id = f"security-audit:{cve}"
+                    if rule_id in seen_chain_rules:
+                        continue
+                    try:
+                        severity = Severity(item.get("severity", "low"))
+                        confidence = Confidence(item.get("confidence", "low"))
+                    except ValueError:
+                        continue
+                    device.findings.append(Finding(
+                        rule_id=rule_id,
+                        title=str(item.get("title") or cve),
+                        severity=severity,
+                        confidence=confidence,
+                        description=(
+                            f"Security Audit Toolkit v6.3.0 · {item.get('status', 'unknown')}. "
+                            f"{item.get('description', '')}"
+                        ).strip(),
+                        evidence=str(item.get("evidence") or ""),
+                        recommendation=str(item.get("recommendation") or ""),
+                        cve=[cve] if cve.startswith("CVE-") else [],
+                        cvss=item.get("cvss"),
+                    ))
+                    seen_chain_rules.add(rule_id)
+                device.severity = vuln_rules.device_severity(device.findings)
+                chain_risk_count = sum(
+                    1 for item in chain_result.get("findings", []) if item.get("risk")
+                )
+                device.assessment = (
+                    f"Security Audit Toolkit v6.3.0 พบความเสี่ยง {chain_risk_count} รายการ"
+                    if chain_risk_count
+                    else vuln_rules.thaicert_assessment(
+                        device.severity,
+                        bool(device.open_ports) or device.service == "HTTP",
+                        device.findings,
+                    )
+                )
+            job.progress.inspected = 1
+            job.progress.risks = sum(
+                1 for item in devices if item.severity != Severity.safe
+            )
 
         order = {
             Severity.critical: 0,

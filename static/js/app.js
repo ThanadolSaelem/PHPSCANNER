@@ -355,13 +355,20 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", report: null, reportFor: "", detected: [] };
+  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", chainAck: false, report: null, reportFor: "", detected: [] };
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
   ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์ของหน่วยงาน", "globe"],
   ["text", "พิมพ์เอง", "หลายรายการคั่นด้วยจุลภาค", "lines"],
 ];
 const siteList = () => S.site.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean).slice(0, cfg.max_sites || 20);
+function chainHost() {
+  const list = siteList(), key = list.join("\n");
+  if (!cfg.chain_available || S.mode !== "site" || list.length !== 1 || S.reportFor !== key || !S.report || S.report.length !== 1) return "";
+  const item = S.report[0], host = String(item.host || "").toLowerCase().replace(/\.$/, "");
+  const allowed = (cfg.chain_allowed_hosts || []).map((x) => String(x).toLowerCase().replace(/\.$/, ""));
+  return allowed.includes(host) && (item.ips || []).length === 1 ? host : "";
+}
 const hostsFor = (p) => (p >= 31 ? 2 ** (32 - p) : 2 ** (32 - p) - 2);
 const detect = (subnets) => (subnets || []).map((s) => { const b = cidrBounds(s.cidr); return { ...s, ok: !!b && inScope(b.net, b.bcast), hosts: b ? hostsFor(b.prefix) : 0 }; });
 
@@ -380,11 +387,18 @@ function scanPlan() {
     else if (asIp) { plan.valid = false; plan.scoped = false; plan.reason = `นี่คือเลข IP — กดปุ่มด้านล่างเพื่อตรวจ ${asIp.ip} ในโหมดเครื่องเดียว`; plan.sub = "ไม่ใช่โดเมนหน่วยงาน"; }
     else if (!fresh) { plan.pending = true; plan.reason = "กำลังตรวจสอบลิงก์…"; plan.sub = "กำลังค้นหา IP จาก DNS…"; }
     else {
-      const bad = S.report.filter((r) => r.problems.length);
+      const allowlistedChainHost = S.mode2 === "chain" && chainHost();
+      const bad = S.report.map((r) => ({
+        ...r,
+        effectiveProblems: (r.problems || []).filter((problem) => !(
+          allowlistedChainHost === String(r.host || "").toLowerCase().replace(/\.$/, "")
+          && problem.startsWith(r.host + " ไม่ใช่โดเมนหน่วยงาน")
+        )),
+      })).filter((r) => r.effectiveProblems.length);
       plan.count = new Set(S.report.flatMap((r) => r.ips)).size;
       plan.scoped = !bad.length;
-      plan.sub = plan.scoped ? S.report.map((r) => `${r.host} → ${r.ips.join(", ")}`).join(" · ") : bad[0].problems[0];
-      if (!plan.scoped) plan.reason = bad[0].refused ? "ตรวจได้เฉพาะโดเมนหน่วยงาน" : bad[0].problems[0];
+      plan.sub = plan.scoped ? S.report.map((r) => r.host + " → " + r.ips.join(", ")).join(" · ") : bad[0].effectiveProblems[0];
+      if (!plan.scoped) plan.reason = bad[0].refused ? "ตรวจได้เฉพาะโดเมนหน่วยงาน" : bad[0].effectiveProblems[0];
     }
     plan.body = { sites: list };
     return plan;
@@ -467,7 +481,7 @@ async function viewScan(_, alive) {
   $("#go").addEventListener("click", async (e) => {
     const plan = scanPlan(), btn = e.currentTarget;
     btn.disabled = true;
-    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2 }); }
+    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2, rce_chain_confirmed: S.mode2 === "chain" && S.chainAck }); }
     catch (err) { toast(err.message); btn.disabled = false; }
   });
 
@@ -476,7 +490,7 @@ async function viewScan(_, alive) {
   pt.addEventListener("click", (e) => {
     const m = e.target.closest("[data-mode]"), d = e.target.closest("[data-detected]");
     if (m && m.dataset.mode !== S.mode) {
-      S.mode = m.dataset.mode; S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true);
+      S.mode = m.dataset.mode; S.swap = 1 - S.swap; S.chainAck = false; renderTargetPanel(); renderAdvPanel(); updateScan(true);
       if (S.mode === "site") resolveSites();
       const first = $("input", pt); first && first.focus({ preventScroll: true });
     }
@@ -491,7 +505,7 @@ async function viewScan(_, alive) {
       t.value = v; S[key][+t.dataset.i] = v; t.setAttribute("aria-invalid", String(v !== "" && +v > 255));
       if (v.length === 3 && +t.dataset.i < 3) focusOct(t, 1);
     } else if (t.id === "rs" || t.id === "re") { t.value = t.value.replace(/\D/g, "").slice(0, 3); S[t.id] = t.value; t.setAttribute("aria-invalid", String(t.value !== "" && +t.value > 255)); }
-    else if (t.id === "site-in") { S.site = t.value; resolveSites(); }
+    else if (t.id === "site-in") { S.site = t.value; S.chainAck = false; resolveSites(); renderAdvPanel(); }
     else if (t.id === "text-in") S.text = t.value;
     else return;
     updateScan();
@@ -533,7 +547,10 @@ async function viewScan(_, alive) {
   });
   $("#p-adv").addEventListener("click", (e) => {
     const b = e.target.closest("[data-mode2]");
-    if (b && !b.disabled && b.dataset.mode2 !== S.mode2) { S.mode2 = b.dataset.mode2; renderAdvPanel(); updateScan(); }
+    if (b && !b.disabled && b.dataset.mode2 !== S.mode2) { S.mode2 = b.dataset.mode2; S.chainAck = false; renderAdvPanel(); updateScan(); }
+  });
+  $("#p-adv").addEventListener("change", (e) => {
+    if (e.target.id === "chain-ack") { S.chainAck = e.target.checked; updateScan(); }
   });
 }
 // A website-mode entry that is really an IP (optionally with a port), e.g.
@@ -623,12 +640,24 @@ function renderPortsPanel() {
 }
 function renderAdvPanel() {
   const deepOff = !cfg.deep_available;
+  const chainOff = !cfg.chain_available;
+  const allowedHost = chainHost();
+  const chainDescription = chainOff ? "ผู้ดูแลยังไม่ได้เปิดใช้ toolkit"
+    : allowedHost ? "ตรวจ 13 CVE · LFI · active RCE verification"
+    : "ใช้ได้เฉพาะ host.docker.internal ใน lab";
   $("#p-adv").innerHTML = `<div class="stag">
-    <div class="ptitle">วิธีสแกน ${tip("เร็ว = เชื่อมต่อ TCP ด้วย Python ไม่ต้องติดตั้งอะไร · ลึก = ใช้ nmap อ่านชนิด/เวอร์ชันบริการ และ traceroute วาดเส้นทางเครือข่าย (ต้องติดตั้ง nmap ในเครื่อง)")}</div>
+    <div class="ptitle">วิธีสแกน ${tip("เร็ว = ตรวจ TCP · ลึก (nmap) = อ่านชนิด/เวอร์ชันบริการ · chain = Security Audit Toolkit 6.3.0 พร้อมตรวจช่องโหว่และพิสูจน์ RCE เมื่อพบเงื่อนไข")}</div>
     <div role="group" aria-label="วิธีสแกน" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">เร็ว</span><span class="od">TCP connect · ไม่ต้องติดตั้ง</span></span></button>
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">ลึก (nmap)</span><span class="od">${deepOff ? "ยังไม่ได้ติดตั้ง nmap" : "อ่านเวอร์ชัน + traceroute"}</span></span></button>
+      <button type="button" class="opt" data-mode2="chain" aria-pressed="${S.mode2 === "chain"}" ${chainOff ? "disabled" : ""} style="grid-column:1 / -1;text-align:left">
+        <span style="min-width:0"><span class="ot">ลึกพิเศษ · Chain</span><span class="od">${chainDescription}</span></span></button>
     </div>
+    ${S.mode2 === "chain" ? (allowedHost ? `<div class="notice b-warn" style="margin-top:10px;align-items:flex-start"><span>${ic("warn",18)}</span><span>จะรัน Security Audit Toolkit กับ <b>${esc(allowedHost)}</b> รวมการตรวจแบบ active เพื่อพิสูจน์ RCE เมื่อพบเงื่อนไข Critical + LFI</span></div>
+      <label style="display:flex;gap:9px;align-items:flex-start;margin-top:10px;padding:10px 12px;border:1px solid var(--warn-line);border-radius:12px;font-size:13px;line-height:1.5">
+        <input id="chain-ack" type="checkbox" ${S.chainAck ? "checked" : ""} style="margin-top:3px;flex:none">
+        <span>ฉันได้รับอนุญาตให้ตรวจ host นี้ และยืนยันให้ระบบทดสอบ active RCE ใน lab</span></label>`
+      : `<p class="notice b-warn" style="margin-top:10px;font-size:13px">โหมด chain ใช้ได้เมื่อเลือกเว็บไซต์ที่ resolve เป็น IP เดียวและตรงกับ allowlist host.docker.internal</p>`) : ""}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
     <label style="display:block"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">ความเร็ว ${tip("จำนวนการเชื่อมต่อพร้อมกัน ลดลงได้ถ้าเครือข่ายช้า หรือไม่อยากกระทบการใช้งาน")}</span><b style="color:var(--ink)" id="speed-v"></b></span>
       <input class="rng" id="speed" type="range" min="5" max="${cfg.max_concurrency}" step="5" value="${S.speed}" aria-label="ความเร็ว"></label>
@@ -657,7 +686,7 @@ function resolveSites() {
     catch (e) { report = [{ input: key, host: key, ips: [], problems: [e.message], refused: false }]; }
     if (siteList().join("\n") !== key) return;
     S.report = report; S.reportFor = key;
-    if ($("#vis")) { renderSitePreview(); updateScan(); }
+    if ($("#vis")) { renderSitePreview(); renderAdvPanel(); updateScan(); }
   }, 450);
 }
 function renderSitePreview() {
@@ -677,6 +706,10 @@ function renderSitePreview() {
     }
   }
   if (S.reportFor !== key || !S.report) { box.innerHTML = `<p class="od">กำลังค้นหา IP จาก DNS…</p>`; return; }
+  if (S.mode2 === "chain" && chainHost()) {
+    box.innerHTML = '<p class="notice b-ok" style="font-size:13px">เป้าหมาย ' + esc(chainHost()) + ' อยู่ใน allowlist ของ lab และ resolve เป็น IP เดียว</p>';
+    return;
+  }
   box.innerHTML = S.report.map((r) => `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;font-size:13px">
     <span class="badge ${r.problems.length ? "b-bad" : "b-ok"}" style="padding:4px 7px">${ic(r.problems.length ? "x" : "check", 13, 3)}</span>
     <span style="min-width:0;overflow-wrap:anywhere">${r.problems.length ? esc(r.problems.join(" · ")) : `<b>${esc(r.host)}</b> → <span class="mono">${esc(r.ips.join(", "))}</span>`}</span></div>`).join("");
@@ -718,23 +751,33 @@ function updateScan(modeChanged) {
   const pc = portCount(S.profile, S.custom);
   $("#sum-target").textContent = plan.summary;
   $("#sum-ports").textContent = pc.error ? "รูปแบบพอร์ตไม่ถูกต้อง" : `${(PROFILE_TEXT[S.profile] || [S.profile])[0]} · ${num(pc.n)} พอร์ต`;
-  $("#sum-adv").textContent = `${S.mode2 === "deep" ? "โหมดลึก (nmap)" : "โหมดเร็ว"} · ${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`}`;
-  // readiness: the button is enabled only when the server would accept the request
+  const modeLabels = { fast: "โหมดเร็ว", deep: "โหมดลึก (nmap)", chain: "โหมดลึกพิเศษ · Chain" };
+  $("#sum-adv").textContent = (modeLabels[S.mode2] || modeLabels.fast) + " · " + (S.speed >= cfg.max_concurrency ? "เร็วสุด" : S.speed + " งาน");
+  // Readiness includes the chain allowlist and an explicit acknowledgement.
+  const chainTarget = chainHost();
+  const chainProblem = S.mode2 !== "chain" ? "" : !cfg.chain_available
+    ? "ผู้ดูแลยังไม่ได้เปิดใช้ Security Audit Toolkit"
+    : !chainTarget ? "โหมด chain ใช้ได้เฉพาะ host.docker.internal ที่ resolve เป็น IP เดียว"
+    : !S.chainAck ? "ยืนยันสิทธิ์และการตรวจ active RCE ก่อนเริ่ม"
+    : "";
   const budgetOk = !pc.error && plan.count * pc.n <= cfg.max_port_probes;
-  const ok = plan.valid && plan.scoped && !plan.pending && !pc.error && budgetOk;
+  const ok = plan.valid && plan.scoped && !plan.pending && !pc.error && budgetOk && !chainProblem;
   const secs = Math.ceil(plan.count / Math.max(1, S.speed)) * 1.5 + Math.ceil((plan.count * 0.25 * Math.max(pc.n || 4, 4)) / (cfg.max_sockets || 256)) * 1.5 + 8 + (S.delay * plan.count) / 1000 / Math.max(1, S.speed);
-  const time = secs < 60 ? "ไม่ถึง 1 นาที" : `ประมาณ ${num(Math.ceil(secs / 60))} นาที`;
-  const reason = plan.reason || (pc.error ? pc.error : !budgetOk ? `งานใหญ่เกินไป (${num(plan.count)} ที่อยู่ × ${num(pc.n)} พอร์ต) — ลดขนาดวงหรือจำนวนพอร์ต` : "");
+  const time = S.mode2 === "chain"
+    ? "สูงสุด " + num(Math.ceil((cfg.chain_timeout_s || 240) / 60)) + " นาที + ขั้นตรวจพอร์ต"
+    : secs < 60 ? "ไม่ถึง 1 นาที" : "ประมาณ " + num(Math.ceil(secs / 60)) + " นาที";
+  const reason = chainProblem || plan.reason || (pc.error ? pc.error : !budgetOk ? "งานใหญ่เกินไป (" + num(plan.count) + " ที่อยู่ × " + num(pc.n) + " พอร์ต) — ลดขนาดวงหรือจำนวนพอร์ต" : "");
   $("#ready-ic").innerHTML = ic(ok ? "check" : plan.pending ? "clock" : "x", 17, 3);
   $("#ready-ic").style.background = ok ? "linear-gradient(135deg,#12A46B,#0B7045)" : plan.pending ? "var(--grad)" : "linear-gradient(135deg,#D9363E,#B4232B)";
   $("#ready-k").textContent = ok ? "พร้อมสแกน" : plan.pending ? "รอสักครู่" : "ยังเริ่มไม่ได้";
-  $("#ready-v").textContent = ok ? `${num(plan.count)} ที่อยู่ · ${time}` : reason;
+  $("#ready-v").textContent = ok ? num(plan.count) + " ที่อยู่ · " + time : reason;
   const line = (good, text) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge ${good ? "b-ok" : "b-bad"}" style="padding:4px 7px">${ic(good ? "check" : "x", 13, 3)}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(text)}</span></div>`;
   $("#p-ready").innerHTML = `<div class="stag">
-    ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
-    ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
-    ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · อ่านอย่างเดียว ไม่ทำลายระบบ</div></div>`;
+    ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : "เป้าหมาย: " + plan.summary) : plan.reason)}
+    ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (S.mode2 === "chain" ? "อยู่ใน allowlist ของ lab" : cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
+    ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? "ตรวจ " + num(pc.n) + " พอร์ตต่อเครื่อง" : reason)}
+    ${S.mode2 === "chain" ? line(!!chainTarget, chainTarget ? "เป้าหมาย chain: " + chainTarget : "เป้าหมายไม่ตรง allowlist หรือมีหลาย IP") + line(S.chainAck, "ยืนยันสิทธิ์และการตรวจ active RCE") : ""}
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "chain" ? "มี active RCE verification เฉพาะเมื่อพบเงื่อนไข" : "อ่านอย่างเดียว ไม่ทำลายระบบ"}</div></div>`;
   $("#go").disabled = !ok;
 }
 
@@ -744,11 +787,14 @@ async function viewScanning([id], alive) {
   if (!alive()) return;
   if (!["queued", "running"].includes(s.state)) { location.replace(`#/results/${id}`); return; }
   setTopSide(`<a class="ghost" href="#/history" title="สแกนต่อในเบื้องหลัง">ย่อไว้เบื้องหลัง</a><button type="button" class="ghost stop" id="cancel">หยุดสแกน</button>`);
-  const STEPS = [
+  const BASE_STEPS = [
     ["ตรวจกลางทาง", "ทดสอบกับที่อยู่ที่ไม่มีจริงก่อน ถ้ามี proxy หรือ firewall ตอบแทนทุกที่อยู่ ระบบจะตัดผลปลอมเหล่านั้นออก"],
     ["หาเครื่องออนไลน์", "ลองเชื่อมต่อทุกที่อยู่ ตามชุดพอร์ตที่เลือก เพื่อดูว่าเครื่องไหนเปิดอยู่"],
     ["ตรวจพอร์ต เว็บ และ PHP", "ดูว่าเครื่องที่ออนไลน์เปิดบริการอะไร แล้วอ่านเวอร์ชัน PHP จากเว็บเพื่อเทียบกับรุ่นที่แพตช์"],
   ];
+  const STEPS = s.scan_mode === "chain"
+    ? [...BASE_STEPS, ["Toolkit · Verify · Report", "ตรวจ CVE และ LFI แล้วสร้างหลักฐานและรายงาน; active RCE จะทำงานเมื่อพบเงื่อนไขที่ toolkit กำหนด"]]
+    : BASE_STEPS;
   render(`<div class="app thin" style="text-align:center">
     <div class="in1">
       <span class="badge b-blue" style="font-size:13px;padding:6px 12px"><span class="live"></span>${s.demo_scenario ? "ตัวอย่าง · ข้อมูลจำลอง" : "กำลังทำงาน"}</span>
@@ -789,11 +835,11 @@ async function viewScanning([id], alive) {
   // the plate shows the probed fraction only; mid-scan the API does not say which addresses answered
   let lastSteps = "", lastPhase = "", stopping = false;
   const paint = (s) => {
-    const p = s.progress, total = Math.max(1, p.total_ips), inspect = p.phase === "inspect";
-    const frac1 = Math.min(1, p.probed / total), frac2 = inspect ? (p.to_inspect ? p.inspected / p.to_inspect : 1) : 0;
-    const pct = inspect ? 55 + Math.round(frac2 * 43) : Math.round(frac1 * 55);
-    const stage = !p.phase ? 0 : inspect ? 2 : 1;
-    const fills = [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
+    const p = s.progress, total = Math.max(1, p.total_ips), inspect = p.phase === "inspect", chain = p.phase === "chain";
+    const frac1 = Math.min(1, p.probed / total), frac2 = inspect || chain ? (p.to_inspect ? p.inspected / p.to_inspect : 1) : 0;
+    const pct = chain ? 98 + Math.round(frac2 * 2) : inspect ? 55 + Math.round(frac2 * 43) : Math.round(frac1 * 55);
+    const stage = chain ? 3 : !p.phase ? 0 : inspect ? 2 : 1;
+    const fills = chain ? [1, 1, 1, frac2] : [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
     $$("[id^=seg]").forEach((b, i) => b.style.setProperty("--f", `${Math.round(fills[i] * 100)}%`));
     const steps = STEPS.map(([t, h], i) => {
       const st = i < stage ? "done" : i === stage ? "on" : "wait";
@@ -812,7 +858,11 @@ async function viewScanning([id], alive) {
     $("#sc-head").style.opacity = frac1 >= 1 ? 0 : 1;
     $("#sc-ring").style.strokeDasharray = `${pct} 100`;
     $("#sc-pct").textContent = `${pct}%`;
-    const phase = stopping ? "กำลังหยุด…" : `${inspect ? `ขั้นที่ 3 จาก 3 · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก 3 · ${STEPS[stage][0]}`} ${tip("ชี้ที่แถบความคืบหน้าเพื่อดูว่าแต่ละขั้นทำอะไร")}`;
+    const phase = stopping ? "กำลังหยุด…" : `${chain
+      ? `ขั้นที่ 4 จาก 4 · ${STEPS[3][0]} (${p.inspected ? "เสร็จแล้ว" : "กำลังทำ"})`
+      : inspect
+        ? `ขั้นที่ 3 จาก 3 · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)`
+        : `ขั้นที่ ${stage + 1} จาก 3 · ${STEPS[stage][0]}`} ${tip("ชี้ที่แถบความคืบหน้าเพื่อดูว่าแต่ละขั้นทำอะไร")}`;
     if (phase !== lastPhase) { $("#sc-phase").innerHTML = phase; lastPhase = phase; }
     $("#c-probed").textContent = num(p.probed); $("#c-total").textContent = num(p.total_ips);
     $("#c-online").textContent = num(p.online); $("#c-risks").textContent = num(p.risks);
@@ -866,6 +916,49 @@ async function viewResults([id], alive) {
 }
 const portsChecked = (j) => ((j.scanned_ports || []).length ? `ตรวจ ${num(j.scanned_ports.length)} พอร์ต · ` : "");
 function counts(j) { const c = { critical: 0, high: 0, low: 0, safe: 0 }; j.devices.forEach((d) => c[d.severity]++); return c; }
+function chainResultCard(job) {
+  const result = job.chain_result;
+  if (!result) return "";
+  const summary = result.summary || {};
+  const verdict = result.rce_verdict || result.status || "unknown";
+  const verdictText = verdict === "RCE_CONFIRMED" ? "ยืนยัน RCE"
+    : verdict === "CANARY_CONFIRMED" ? "ยืนยันด้วย Canary"
+    : verdict === "NOT_CONFIRMED" ? "ตรวจแล้วแต่ยังยืนยัน RCE ไม่ได้"
+    : verdict === "NOT_REQUIRED" ? "ไม่เข้าเงื่อนไขสำหรับ RCE Verify"
+    : result.status === "timeout" ? "หมดเวลาตรวจ"
+    : result.status === "cancelled" ? "ผู้ใช้หยุดการตรวจ"
+    : result.status === "unreachable" ? "เชื่อมต่อเป้าหมายไม่ได้"
+    : result.status === "completed" ? "ตรวจเสร็จ"
+    : "ตรวจไม่สำเร็จ";
+  const badge = verdict === "RCE_CONFIRMED" ? "b-bad"
+    : verdict === "CANARY_CONFIRMED" ? "b-warn"
+    : result.status === "completed" && result.reachable ? "b-ok" : "b-warn";
+  const findings = (result.findings || []).filter((item) => item.risk);
+  const findingHtml = findings.length ? `<ul class="stag" style="margin:10px 0 0;padding-left:20px">${findings.slice(0, 8).map((item) =>
+    `<li style="padding:3px 0"><b>${esc(item.cve || item.title)}</b> · ${esc(item.status)} — ${esc(item.title || "")}</li>`).join("")}</ul>`
+    : '<p class="muted" style="margin-top:8px">ไม่พบรายการที่ toolkit จัดเป็นความเสี่ยง</p>';
+  const links = (result.artifacts || []).map((item) => {
+    const path = String(item.path || "").split("/").map(encodeURIComponent).join("/");
+    const href = "/api/scans/" + encodeURIComponent(job.id) + "/chain-artifacts/" + path;
+    return `<a class="mi" href="${esc(href)}" target="_blank" rel="noopener"><span>${esc(item.kind || "ไฟล์")} · ${esc(item.name || item.path)}</span></a>`;
+  }).join("");
+  const details = [
+    "Toolkit v" + (result.tool_version || "6.3.0"),
+    result.server || "",
+    result.php_version ? "PHP " + result.php_version : "",
+  ].filter(Boolean).join(" · ");
+  return `<section class="card in2" aria-label="ผลตรวจแบบ chain" style="margin-top:16px;padding:16px 20px">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px">
+      <h2 style="font-size:16px">ผลตรวจเชิงลึกแบบ chain</h2><span class="badge ${badge}">${esc(verdictText)}</span>
+    </div>
+    <p class="muted" style="margin-top:6px;font-size:13px;overflow-wrap:anywhere">${esc(result.target || "")} · ${esc(details)}</p>
+    <p style="margin-top:8px;font-size:13.5px">ตรวจ ${num(summary.total_cves || 0)} รายการ · พบความเสี่ยง ${num(summary.detected || 0)} · ยืนยัน/มีความเสี่ยงสูง ${num(summary.vulnerable || 0)} · คำเตือน ${num(summary.warning || 0)} · สรุปไม่ได้ ${num(summary.unknown || 0)} · LFI ${num(result.lfi_count || 0)}</p>
+    ${result.error ? `<p class="notice b-warn" style="margin-top:8px;font-size:13px">${esc(result.error)}</p>` : ""}
+    ${findingHtml}
+    ${links ? `<details class="raw" style="margin-top:10px"><summary>รายงานและหลักฐาน (${num((result.artifacts || []).length)} ไฟล์)</summary><div class="stag" style="margin-top:8px">${links}</div></details>` : ""}
+  </section>`;
+}
+
 function renderResults() {
   const j = R.job, c = counts(j), risks = c.critical + c.high + c.low, demo = !!j.demo_scenario;
   const scoreColor = j.security_score >= 80 ? "var(--ok-dot)" : j.security_score >= 65 ? "var(--warn-dot)" : "var(--crit-dot)";
@@ -874,7 +967,7 @@ function renderResults() {
   <div class="page-head in1">
     <div class="sec" style="min-width:0">
       <p style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:13px;color:var(--muted)">
-        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}${j.scan_mode === "deep" ? `<span class="badge b-ok">${ic("search",12,2.6)} โหมดลึก · nmap</span>` : ""}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
+        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}${j.scan_mode === "deep" ? `<span class="badge b-ok">${ic("search",12,2.6)} โหมดลึก · nmap</span>` : j.scan_mode === "chain" ? `<span class="badge b-warn">${ic("search",12,2.6)} โหมดลึก · chain</span>` : ""}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
         ${tip(`${demo ? "ผลจากข้อมูลจำลอง ไม่ได้ส่งสัญญาณไปที่เครือข่ายใด · " : ""}${portsChecked(j)}ใช้เวลา ${fmtDuration(j.duration_s)}`)}</p>
       <h1 class="h1" style="margin-top:8px">${headline}</h1>
     </div>
@@ -891,6 +984,7 @@ function renderResults() {
   ${j.state === "failed" ? `<p class="notice b-bad in1" style="margin-top:14px">${ic("alert", 20)}<span>การสแกนผิดพลาด: ${esc(j.error || "ไม่ทราบสาเหตุ")}</span></p>` : ""}
   ${j.note_deep ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>${esc(j.note_deep)}</span></p>` : ""}
   ${(j.intercepted_ports || []).length ? `<p class="notice b-blue in1" style="margin-top:14px">${ic("shield", 20)}<span>พบอุปกรณ์กลางทาง (เช่น proxy หรือ firewall) ตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(j.intercepted_ports.join(", "))}</span> — ระบบตัดเครื่องที่ไม่มีอยู่จริงออกให้แล้ว</span></p>` : ""}
+  ${chainResultCard(j)}
   <dl class="card stats in2" style="margin-top:16px;margin-bottom:0">
     <div class="stat sec"><dt class="muted">ออนไลน์ ${tip("เครื่องที่ตอบรับการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง")}</dt><dd style="color:var(--blue-ink)"><span class="cnt" data-to="${j.devices.length}">0</span><small> / ${num(j.progress.total_ips)}</small></dd></div>
     <div class="stat sec"><dt style="color:var(--crit)">ต้องแก้ด่วน ${tip("ใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell ผู้ไม่หวังดีอาจสั่งงานเครื่องได้ ควรอัปเดตก่อน")}</dt><dd style="color:var(--crit)"><span class="cnt" data-to="${c.critical}">0</span></dd></div>
@@ -917,7 +1011,9 @@ function renderResults() {
   rescan && rescan.addEventListener("click", async () => {
     rescan.disabled = true;
     const r = j.request || {};
-    const base = { port_profile: r.port_profile, custom_ports: r.custom_ports, scan_mode: r.scan_mode };
+    if (r.scan_mode === "chain" && !window.confirm("ยืนยันให้รัน Security Audit Toolkit และ active RCE verification ซ้ำกับ host.docker.internal ใน lab?")) return;
+    const base = { port_profile: r.port_profile, custom_ports: r.custom_ports, scan_mode: r.scan_mode,
+      rce_chain_confirmed: r.scan_mode === "chain" };
     try { await startScan(r.sites && r.sites.length ? { ...base, sites: r.sites } : { ...base, targets: r.targets }); }
     catch (err) { toast(err.message); rescan.disabled = false; }
   });
