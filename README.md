@@ -69,13 +69,15 @@ CDN ที่ต่างกันไปในแต่ละหน่วยง�
 
 ### โหมดลึกพิเศษแบบ chain
 
-เลือก “ลึกพิเศษ · Chain” ในแผงขั้นสูงเพื่อเรียกใช้ Security Audit Toolkit v6.3.0 แบบ Scan → Verify → Report โหมดนี้ตรวจได้ครั้งละหนึ่งเว็บไซต์ที่อยู่ใน allowlist ของเซิร์ฟเวอร์; ค่าใน Docker Compose เปิดไว้เฉพาะ `host.docker.internal` และต้อง resolve เป็น IPv4 เดียว
+เลือก “ลึกพิเศษ · Chain” ในแผงขั้นสูงเพื่อเรียกใช้ Security Audit Toolkit v6.3.0 แบบ Scan → Verify → Report โหมดนี้ตรวจได้ครั้งละหนึ่ง IPv4 หรือหนึ่ง URL ที่ resolve ไปยัง IPv4 เดียว สำหรับ IP ระบบเลือกพอร์ตเว็บจากชุดพอร์ตหลักที่ตั้งไว้ และใช้ HTTP พอร์ต 80 หากชุดที่เลือกไม่มีพอร์ตเว็บ ส่วน URL จะใช้ scheme, host, port และ path ตามลิงก์ที่ระบุ
 
-ก่อนเริ่ม ผู้ใช้ต้องติ๊กยืนยันสิทธิ์และยอมรับการตรวจแบบ active ฝั่ง API ตรวจซ้ำทั้งการตั้งค่า allowlist, โหมดที่เลือก, จำนวนเป้าหมาย และการยืนยันนี้ การตรวจ RCE จะเริ่มเฉพาะเมื่อ toolkit พบทั้งเงื่อนไข Critical และ LFI ที่กำหนด โดยการยืนยัน toolkit อาจส่งคำสั่ง `id` บนเป้าหมายเพื่อพิสูจน์ผล การตรวจ chain จึงไม่ใช่โหมดอ่านอย่างเดียว
+Chain ใช้กติกา scope เดียวกับระบบหลัก: เมื่อ `THSCAN_ENFORCE_SCOPE=1` เป้าหมาย IP ต้องอยู่ใน `THSCAN_ALLOWED_CIDRS` และ URL ต้องตรงกับ suffix ใน `THSCAN_GOV_SUFFIXES`; เมื่อปิด enforcement จะทำงานตามโหมดเปิดของระบบหลัก ไม่มี hostname allowlist แยกสำหรับ chain
 
-ตัวเรียก toolkit ผูก DNS กับ IP ที่ API resolve ไว้ และปฏิเสธ redirect/การเชื่อมต่อไปยังโฮสต์อื่น ไฟล์ pipeline, รายงาน และหลักฐานจะเก็บใน `data/chain/<job-id>/` และเปิดดาวน์โหลดจากการ์ดผล chain ได้ การกดยกเลิกหรือหมดเวลาจะหยุด subprocess ทั้งชุด
+ก่อนเริ่ม ผู้ใช้ต้องติ๊กยืนยันสิทธิ์และยอมรับการตรวจแบบ active ฝั่ง API ตรวจซ้ำโหมด จำนวนเป้าหมาย scope และการยืนยันนี้ การตรวจ RCE จะเริ่มเฉพาะเมื่อ toolkit พบทั้งเงื่อนไข Critical และ LFI ที่กำหนด โดย toolkit อาจส่งคำสั่ง `id` บนเป้าหมายเพื่อพิสูจน์ผล การตรวจ chain จึงไม่ใช่โหมดอ่านอย่างเดียว
 
-นอก Docker Compose โหมดนี้ปิดเป็นค่าเริ่มต้น ให้ผู้ดูแลเปิดด้วย `THSCAN_ENABLE_RCE_CHAIN=1` และกำหนด `THSCAN_RCE_CHAIN_ALLOWED_HOSTS` เป็นชื่อเป้าหมาย lab ที่ต้องการเท่านั้น
+ตัวเรียก toolkit ผูก DNS กับ IP ที่ระบบ resolve ไว้ และปฏิเสธ redirect/การเชื่อมต่อไปยังโฮสต์อื่น ไฟล์ pipeline รายงานและหลักฐานจะเก็บใน `data/chain/<job-id>/` และเปิดดาวน์โหลดจากการ์ดผล chain ได้ การกดยกเลิกหรือหมดเวลาจะหยุด subprocess ทั้งชุด
+
+นอก Docker Compose โหมดนี้ปิดเป็นค่าเริ่มต้น ให้ผู้ดูแลเปิดด้วย `THSCAN_ENABLE_RCE_CHAIN=1`
 
 ### ตรวจพอร์ต
 
@@ -104,10 +106,9 @@ CDN ที่ต่างกันไปในแต่ละหน่วยง�
 
 ## การควบคุมการเข้าถึง
 
-โหมดเร็วและ nmap เป็นการตรวจแบบอ่านอย่างเดียว ส่วนโหมด chain มีการยืนยันสิทธิ์ก่อนการตรวจ active และมี allowlist ที่ตรวจฝั่งเซิร์ฟเวอร์ การควบคุมที่มีผลจริงคือ:
+โหมดเร็วและ nmap เป็นการตรวจแบบอ่านอย่างเดียว ส่วนโหมด chain มีการยืนยันสิทธิ์ก่อนการตรวจ active และใช้ scope policy เดียวกับระบบหลัก การควบคุมที่มีผลจริงคือ:
 
-- **ขอบเขตที่กำหนดตอน deploy** — `THSCAN_ALLOWED_CIDRS` คือช่วงเดียวที่ instance นี้สแกนได้
-  เป้าหมาย/ตารางเวลานอกช่วงถูก API ปฏิเสธ (403) และแก้จากหน้าเว็บไม่ได้โดยตั้งใจ
+- **ขอบเขตที่กำหนดตอน deploy** — เมื่อ `THSCAN_ENFORCE_SCOPE=1` IP ต้องอยู่ใน `THSCAN_ALLOWED_CIDRS` และ URL ต้องตรงกับ suffix ใน `THSCAN_GOV_SUFFIXES`; เมื่อปิด enforcement ระบบใช้โหมดเปิดตามการตั้งค่าหลัก
 - **ตรวจอินพุตทั้งฝั่ง UI และเซิร์ฟเวอร์** — IPv4 0–255 เท่านั้น, จำกัดจำนวนที่อยู่ (`THSCAN_MAX_TARGETS`),
   คำนวณขนาดช่วงแบบเลขคณิต (ช่วงใหญ่ถูกปฏิเสธทันทีไม่กินหน่วยความจำ), ค่าไม่ถูกส่งเข้า shell
 - **การยิงสัญญาณ** — TCP connect + timeout + จำกัด concurrency, HTTP เชื่อมต่อด้วย IP ตรง,
@@ -150,7 +151,6 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 | `THSCAN_LIVENESS_PORTS` | `22,445,3389,53` | พอร์ตเสริมที่ใช้ตรวจว่าเครื่องออนไลน์ |
 | `THSCAN_POLITE_DELAY_MS` | `0` | หน่วงต่อ host (ms) |
 | `THSCAN_ENABLE_RCE_CHAIN` | `0` | เปิดโหมด Security Audit Toolkit chain (ปิดเป็นค่าเริ่มต้น) |
-| `THSCAN_RCE_CHAIN_ALLOWED_HOSTS` | `host.docker.internal` | allowlist โฮสต์สำหรับโหมด chain |
 | `THSCAN_RCE_CHAIN_TIMEOUT_S` | `240` | เวลาสูงสุดของ subprocess toolkit (วินาที) |
 | `THSCAN_MAX_PORT_PROBES` | `2000000` | ขีดจำกัด (ที่อยู่ × พอร์ต) ต่อการสแกน |
 | `THSCAN_MAX_SOCKETS` | *(คำนวณอัตโนมัติ)* | การเชื่อมต่อพร้อมกันทั้งโปรแกรม |
@@ -166,7 +166,7 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 |---|---|---|
 | `GET` | `/api/config` | ขอบเขต ลิมิต พอร์ต timezone รายการตัวอย่าง |
 | `GET` | `/api/autodetect` | วงเครือข่ายของเครื่องนี้ |
-| `POST` | `/api/scans` | `{"targets": ["10.0.0.0/24"]}` หรือ `{"sites": ["https://www.agency.go.th"]}` หรือ `{"demo_scenario": "gov-cert"}` · เพิ่ม `"scan_mode": "chain"` และ `"rce_chain_confirmed": true` เพื่อขอโหมด chain (เซิร์ฟเวอร์ยังบังคับ allowlist) |
+| `POST` | `/api/scans` | `{"targets": ["10.0.0.0/24"]}` หรือ `{"sites": ["https://www.agency.go.th"]}` หรือ `{"demo_scenario": "gov-cert"}` · โหมด chain รับ IP เดี่ยว หรือ URL เดี่ยวที่ resolve เป็น IPv4 เดียว โดยเพิ่ม `"scan_mode": "chain"` และ `"rce_chain_confirmed": true` (เซิร์ฟเวอร์ยังบังคับ scope หลัก) |
 | `GET` | `/api/resolve?q=` | ตรวจลิงก์ล่วงหน้า: IP, โดเมนหน่วยงาน, อยู่ในขอบเขตไหม |
 | `GET` / `DELETE` | `/api/scans` | รายการประวัติ / ล้างประวัติ |
 | `GET` | `/api/scans/{id}` · `/summary` | ผลเต็ม / สรุปสำหรับ poll |

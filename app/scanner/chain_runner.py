@@ -117,12 +117,12 @@ def _artifacts(root: Path) -> List[Dict[str, str]]:
 
 
 def _guard_source(host: str, ip: str) -> str:
-    return f'''"""Restrict toolkit traffic to the configured lab host and pinned address."""
+    return f'''"""Restrict toolkit traffic to this scan's target host and pinned address."""
 import ipaddress
 import socket
 from urllib.parse import urljoin, urlsplit
 
-_ALLOWED_HOST = {host!r}.lower().rstrip(".")
+_TARGET_HOST = {host!r}.lower().rstrip(".")
 _PINNED_IP = {ip!r}
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -133,8 +133,8 @@ def _guarded_getaddrinfo(host, port, *args, **kwargs):
         address = str(ipaddress.ip_address(normalized))
     except ValueError:
         address = None
-    if normalized != _ALLOWED_HOST and address != _PINNED_IP:
-        raise socket.gaierror("Security Audit Toolkit is restricted to the authorized lab host")
+    if normalized != _TARGET_HOST and address != _PINNED_IP:
+        raise socket.gaierror("Security Audit Toolkit is restricted to this scan target")
     return _original_getaddrinfo(_PINNED_IP, port, *args, **kwargs)
 
 socket.getaddrinfo = _guarded_getaddrinfo
@@ -148,9 +148,9 @@ try:
         if location:
             next_url = urlsplit(urljoin(response.url, location))
             if (next_url.scheme.lower() not in ("http", "https")
-                    or (next_url.hostname or "").rstrip(".").lower() != _ALLOWED_HOST):
+                    or (next_url.hostname or "").rstrip(".").lower() != _TARGET_HOST):
                 raise requests.TooManyRedirects(
-                    "Redirect refused outside the authorized lab host", response=response)
+                    "Redirect refused outside this scan target", response=response)
         return location
 
     requests.Session.get_redirect_target = _guarded_redirect_target
@@ -182,6 +182,7 @@ async def run_chain(
     job_id: str,
     target: str,
     target_ip: str,
+    expected_host: str,
     cancel: asyncio.Event,
 ) -> Dict[str, Any]:
     executable = shutil.which("security-audit")
@@ -189,24 +190,29 @@ async def run_chain(
         return {"status": "unavailable", "target": target, "error": "Toolkit CLI is not installed"}
 
     try:
-        ipaddress.ip_address(target_ip)
+        pinned_ip = str(ipaddress.ip_address(target_ip))
         parts = urlsplit(target)
-        if parts.scheme.lower() not in ("http", "https") or (parts.hostname or "").lower() not in settings.rce_chain_allowed_hosts:
-            return {"status": "rejected", "target": target, "error": "Target is outside the configured allowlist"}
+        target_host = (parts.hostname or "").rstrip(".").lower()
+        expected = expected_host.rstrip(".").lower()
+        if (parts.scheme.lower() not in ("http", "https") or not target_host
+                or target_host != expected or parts.username or parts.password):
+            return {"status": "rejected", "target": target, "error": "Target does not match the scan's pinned host"}
+        # Validate an explicit port early so malformed URLs are rejected before starting a subprocess.
+        _ = parts.port
     except ValueError:
-        return {"status": "rejected", "target": target, "error": "Invalid pinned target address"}
+        return {"status": "rejected", "target": target, "error": "Invalid URL or pinned target address"}
 
     root = Path(settings.data_dir) / "chain" / job_id
     runtime_dir = root / ".runtime"
     root.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     (runtime_dir / "sitecustomize.py").write_text(
-        _guard_source(parts.hostname or "", target_ip), encoding="utf-8"
+        _guard_source(target_host, pinned_ip), encoding="utf-8"
     )
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(runtime_dir)
-    # Avoid sending the authorized lab scan through a machine-wide proxy.
+    # Avoid sending the scan through a machine-wide proxy that could bypass the target guard.
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         env.pop(key, None)
 

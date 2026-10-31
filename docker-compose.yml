@@ -25,9 +25,8 @@ services:
       THSCAN_CONNECT_TIMEOUT: "3.5"
       THSCAN_HTTP_TIMEOUT: "8"
       THSCAN_POLITE_DELAY_MS: "0"
-      # Full chain is enabled only for the isolated host.docker.internal lab.
+      # Chain targets follow the main scan scope and require per-scan confirmation.
       THSCAN_ENABLE_RCE_CHAIN: "1"
-      THSCAN_RCE_CHAIN_ALLOWED_HOSTS: "host.docker.internal"
       THSCAN_RCE_CHAIN_TIMEOUT_S: "240"
       THSCAN_WEB_PORTS: "80,443,8080,8443"
       THSCAN_LIVENESS_PORTS: "22,445,3389,53"

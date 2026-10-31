@@ -45,11 +45,7 @@ scheduler = Scheduler(store)
 
 
 def _chain_available() -> bool:
-    return (
-        settings.rce_chain_enabled
-        and bool(settings.rce_chain_allowed_hosts)
-        and chain_runner.available()
-    )
+    return settings.rce_chain_enabled and chain_runner.available()
 
 
 @app.get("/healthz")
@@ -70,7 +66,6 @@ async def get_config() -> dict:
         "enforce_scope": settings.enforce_scope,
         "deep_available": nmap_scan.nmap_available(),
         "chain_available": _chain_available(),
-        "chain_allowed_hosts": settings.rce_chain_allowed_hosts if _chain_available() else [],
         "chain_timeout_s": settings.rce_chain_timeout_s,
         "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
@@ -97,7 +92,7 @@ async def autodetect() -> dict:
     return {"subnets": discovery.autodetect_subnets()}
 
 
-async def _resolve_sites(texts: list, allow_chain_host: bool = False) -> list:
+async def _resolve_sites(texts: list) -> list:
     """Parse, resolve and check each link. Returns a list of report dicts."""
     out = []
     for text in texts[: sites.MAX_SITES]:
@@ -112,13 +107,8 @@ async def _resolve_sites(texts: list, allow_chain_host: bool = False) -> list:
             problems = sites.check(site, settings.gov_suffixes)
             item["suffix"] = site.suffix
             if settings.enforce_scope:
-                is_allowed_chain_host = (
-                    allow_chain_host
-                    and site.host in settings.rce_chain_allowed_hosts
-                )
-                if not is_allowed_chain_host:
-                    item["problems"] = problems
-                    item["refused"] = bool(problems)
+                item["problems"] = problems
+                item["refused"] = bool(problems)
         except sites.SiteError as exc:
             item["problems"] = [str(exc)]
         out.append(item)
@@ -144,10 +134,12 @@ async def create_scan(req: ScanRequest) -> dict:
             raise HTTPException(503, "ยังไม่ได้เปิดใช้ Security Audit Toolkit บนเซิร์ฟเวอร์นี้")
         if not req.rce_chain_confirmed:
             raise HTTPException(400, "กรุณายืนยันสิทธิ์และการตรวจแบบ active ก่อนเริ่มโหมด chain")
-        if req.targets:
-            raise HTTPException(400, "โหมด chain รับเฉพาะเว็บไซต์ใน allowlist")
-        if len(req.sites) != 1:
-            raise HTTPException(400, "โหมด chain ตรวจได้ครั้งละหนึ่งเว็บไซต์ใน allowlist")
+        if bool(req.targets) == bool(req.sites):
+            raise HTTPException(400, "โหมด chain ต้องระบุ IP เดี่ยวหรือ URL เดี่ยวอย่างใดอย่างหนึ่ง")
+        if req.targets and len(req.targets) != 1:
+            raise HTTPException(400, "โหมด chain ตรวจ IP ได้ครั้งละหนึ่งเป้าหมาย")
+        if req.sites and len(req.sites) != 1:
+            raise HTTPException(400, "โหมด chain ตรวจ URL ได้ครั้งละหนึ่งเป้าหมาย")
     if req.demo_scenario:
         valid_ids = {d["id"] for d in demo_scenarios.DEMO_SCENARIOS}
         if req.demo_scenario not in valid_ids:
@@ -165,13 +157,11 @@ async def create_scan(req: ScanRequest) -> dict:
         raise HTTPException(400, f"ตรวจเว็บไซต์ได้ครั้งละไม่เกิน {sites.MAX_SITES} ลิงก์")
     direct_targets = list(req.targets)  # only these are bound by the IP scope
     if req.sites:
-        report = await _resolve_sites(req.sites, allow_chain_host=is_chain)
+        report = await _resolve_sites(req.sites)
         if is_chain:
             item = report[0] if report else {}
-            if item.get("host") not in settings.rce_chain_allowed_hosts:
-                raise HTTPException(403, "โหมด chain ใช้ได้เฉพาะชื่อโฮสต์ใน allowlist ของผู้ดูแล")
             if len(item.get("ips", [])) != 1:
-                raise HTTPException(400, "โหมด chain ต้อง resolve เป็น IPv4 เพียงหนึ่งหมายเลข")
+                raise HTTPException(400, "โหมด chain ต้อง resolve URL เป็น IPv4 เพียงหนึ่งหมายเลข")
             raw_site = req.sites[0].strip()
             parts = urlsplit(raw_site if "://" in raw_site else "http://" + raw_site)
             if parts.username or parts.password:
@@ -197,9 +187,11 @@ async def create_scan(req: ScanRequest) -> dict:
     if not req.targets:
         raise HTTPException(400, "ไม่ได้ระบุเป้าหมาย")
     try:
-        _, total = expand_targets(req.targets, settings.max_targets)
+        expanded_targets, total = expand_targets(req.targets, settings.max_targets)
     except TargetError as exc:
         raise HTTPException(400, str(exc))
+    if is_chain and (total != 1 or len(expanded_targets) != 1):
+        raise HTTPException(400, "โหมด chain ตรวจได้ครั้งละหนึ่ง IPv4 เท่านั้น")
     # The IP scope is a hard limit only when THSCAN_ENFORCE_SCOPE is on. By
     # default the operator may scan anything they type; website targets are
     # never bound by the IP scope regardless.
@@ -218,6 +210,19 @@ async def create_scan(req: ScanRequest) -> dict:
                                          sorted(set(settings.web_ports) | set(req.extra_web_ports)))
     except ports.PortSpecError as exc:
         raise HTTPException(400, str(exc))
+    if is_chain and not req.chain_target_url:
+        # The toolkit is a web audit pipeline; bind an IP target to one selected
+        # HTTP(S) port so it inspects the service selected in the main scan.
+        preferred = (80, 443, 8080, 8443, 8000, 8008, 8081, 8888, 3000, 5000)
+        chain_port = next((p for p in preferred if p in scan_ports), None)
+        if chain_port is None and req.port_profile in {"custom", "web"}:
+            chain_port = next((p for p in scan_ports if p not in ports.NON_WEB_PORTS), None)
+        if chain_port is None:
+            chain_port = 80
+        scheme = "https" if chain_port in {443, 8443} else "http"
+        default_port = 443 if scheme == "https" else 80
+        netloc = expanded_targets[0] if chain_port == default_port else f"{expanded_targets[0]}:{chain_port}"
+        req.chain_target_url = urlunsplit((scheme, netloc, "/", "", ""))
     if total * len(scan_ports) > settings.max_port_probes:
         raise HTTPException(
             400,

@@ -49,7 +49,7 @@ class ScanRequest(CompatBaseModel):
     scan_mode: str = "fast"
     # The operator explicitly acknowledges active verification before chain mode.
     rce_chain_confirmed: bool = False
-    # Set by the API after enforcing the configured chain hostname allowlist.
+    # Set by the API after binding the single target to its resolved IP and scope.
     chain_target_url: Optional[str] = None
     concurrency: Optional[int] = None
     polite_delay_ms: Optional[int] = None

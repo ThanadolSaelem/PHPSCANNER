@@ -325,7 +325,8 @@ class ScanEngine:
             target_ip = ips[0]
             target_url = req.chain_target_url or req.sites[0]
             chain_result = await chain_runner.run_chain(
-                s, job.id, target_url, target_ip, cancel
+                s, job.id, target_url, target_ip,
+                req.site_hosts.get(target_ip) or target_ip, cancel
             )
             job.chain_result = chain_result
             if cancel.is_set():
