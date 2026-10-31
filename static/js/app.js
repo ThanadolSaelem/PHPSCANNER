@@ -624,10 +624,10 @@ function renderPortsPanel() {
 function renderAdvPanel() {
   const deepOff = !cfg.nmap_available && !cfg.deep_available;
   $("#p-adv").innerHTML = `<div class="stag">
-    <div class="ptitle">วิธีสแกน ${tip("เร็ว = เชื่อมต่อ TCP ร่วมกับชุดตรวจช่องโหว่ CybersRMUTL ทันทีโดยไม่ต้องรอ nmap · ลึก = ใช้ nmap อ่านชนิด/เวอร์ชันบริการ และ traceroute วาดเส้นทางเครือข่าย")}</div>
+    <div class="ptitle">วิธีสแกน ${tip("โหมดรวดเร็ว = ตรวจพอร์ตและช่องโหว่ได้อย่างรวดเร็ว · โหมดเชิงลึก = ตรวจรายละเอียดเวอร์ชันบริการและสำรวจเส้นทางเครือข่ายเพิ่มเติม")}</div>
     <div role="group" aria-label="วิธีสแกน" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-      <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">เร็ว (TCP + CybersRMUTL)</span><span class="od">TCP connect + ชุดตรวจ CybersRMUTL</span></span></button>
-      <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">เชิงลึก (nmap + traceroute)</span><span class="od">${deepOff ? "ยังไม่ได้ติดตั้ง nmap" : "อ่านเวอร์ชันบริการ + เส้นทางเครือข่าย"}</span></span></button>
+      <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">โหมดรวดเร็ว</span><span class="od">ตรวจพอร์ตและช่องโหว่มาตรฐาน</span></span></button>
+      <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
     </div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
     <label style="display:block"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">ความเร็ว ${tip("จำนวนการเชื่อมต่อพร้อมกัน ลดลงได้ถ้าเครือข่ายช้า หรือไม่อยากกระทบการใช้งาน")}</span><b style="color:var(--ink)" id="speed-v"></b></span>
@@ -874,7 +874,7 @@ function renderResults() {
   <div class="page-head in1">
     <div class="sec" style="min-width:0">
       <p style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:13px;color:var(--muted)">
-        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}${j.scan_mode === "deep" ? `<span class="badge b-ok">${ic("search",12,2.6)} โหมดลึก · nmap + traceroute</span>` : `<span class="badge b-blue">${ic("shield",12,2.6)} โหมดเร็ว · TCP + CybersRMUTL</span>`}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
+        ${demo ? '<span class="badge b-blue">ตัวอย่าง · ข้อมูลจำลอง</span>' : ""}${j.scan_mode === "deep" ? `<span class="badge b-ok">${ic("search",12,2.6)} โหมดเชิงลึก</span>` : `<span class="badge b-blue">${ic("shield",12,2.6)} โหมดรวดเร็ว</span>`}<span class="num" style="overflow-wrap:anywhere">${esc(j.target_label)}</span><span>· ${esc(fmtDate(j.created_at))}</span>
         ${tip(`${demo ? "ผลจากข้อมูลจำลอง ไม่ได้ส่งสัญญาณไปที่เครือข่ายใด · " : ""}${portsChecked(j)}ใช้เวลา ${fmtDuration(j.duration_s)}`)}</p>
       <h1 class="h1" style="margin-top:8px">${headline}</h1>
     </div>
