@@ -6,8 +6,6 @@ services:
     # host networking so auto-detect and scans see your real LAN (Linux hosts).
     # On Docker Desktop (Windows/macOS) use run.bat / run.sh instead.
     network_mode: host
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - thscan-data:/data
     environment:
