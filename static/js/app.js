@@ -718,7 +718,7 @@ function updateScan(modeChanged) {
   const pc = portCount(S.profile, S.custom);
   $("#sum-target").textContent = plan.summary;
   $("#sum-ports").textContent = pc.error ? "รูปแบบพอร์ตไม่ถูกต้อง" : `${(PROFILE_TEXT[S.profile] || [S.profile])[0]} · ${num(pc.n)} พอร์ต`;
-  $("#sum-adv").textContent = `${S.mode2 === "deep" ? "โหมดลึก (nmap + traceroute)" : "โหมดเร็ว (TCP + CybersRMUTL)"} · ${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`}`;
+  $("#sum-adv").textContent = `${S.mode2 === "deep" ? "โหมดเชิงลึก" : "โหมดรวดเร็ว"} · ${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`}`;
   // readiness: the button is enabled only when the server would accept the request
   const budgetOk = !pc.error && plan.count * pc.n <= cfg.max_port_probes;
   const ok = plan.valid && plan.scoped && !plan.pending && !pc.error && budgetOk;
@@ -1065,7 +1065,7 @@ function paintTabs() {
     const headers = Object.entries(d.headers || {});
     html = `<dl class="kv">${kv.map(([k, v, h]) => `<div class="sec"><dt>${k}${h ? ` ${tip(h)}` : ""}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
       ${headers.length ? `<details class="raw"><summary>ดู header ที่เว็บตอบกลับ (สำหรับเจ้าหน้าที่เทคนิค)</summary><div class="evidence">${esc(headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</div></details>` : ""}
-      ${(d.route && d.route.length) ? `<div class="sec" style="margin-top:12px"><div class="lbl">เส้นทางเครือข่าย (traceroute) ${tip("ลำดับอุปกรณ์ (hop) ที่แพ็กเก็ตวิ่งผ่านกว่าจะถึงเครื่องนี้ · * = hop นั้นไม่ตอบ")}</div>
+      ${(d.route && d.route.length) ? `<div class="sec" style="margin-top:12px"><div class="lbl">เส้นทางเครือข่าย ${tip("ลำดับอุปกรณ์ (hop) ที่แพ็กเก็ตวิ่งผ่านกว่าจะถึงเครื่องนี้ · * = hop นั้นไม่ตอบ")}</div>
         <ol style="list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px">${d.route.map((h) => `<li style="display:flex;align-items:center;gap:10px;font-size:13px"><span class="pnum" style="min-width:34px">${h.hop}</span><span class="mono" style="flex:1">${esc(h.ip || "* (ไม่ตอบ)")}</span><span class="muted">${h.rtt_ms != null ? h.rtt_ms + " ms" : ""}</span></li>`).join("")}</ol></div>` : ""}`;
   }
   const panel = $("#tabpanel");
