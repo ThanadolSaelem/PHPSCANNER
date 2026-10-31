@@ -38,10 +38,10 @@ async def _probe_port_unlimited(ip: str, port: int, timeout: float) -> Tuple[boo
         return False, None
 
 
+# A documentation address (RFC 5737 TEST-NET-2) that can never be a real host.
+# Anything that answers for it is a middlebox answering for every address.
 async def _accepts_tcp(ip: str, port: int, timeout: float) -> bool:
-    """Return True ONLY when a full TCP handshake succeeds (SYN-ACK).
-    Unlike ``_probe_port``, a TCP RST (``ConnectionRefusedError``) returns False
-    so a router rejecting RFC 5737 canary traffic is never mistaken for a proxy."""
+    """Return True ONLY when a full TCP handshake succeeds (SYN-ACK)."""
     async with netlimit.slot():
         try:
             fut = asyncio.open_connection(ip, port)
@@ -56,14 +56,12 @@ async def _accepts_tcp(ip: str, port: int, timeout: float) -> bool:
             return False
 
 
-# A documentation address (RFC 5737 TEST-NET-2) that can never be a real host.
-# Anything that completes a TCP handshake for it is a middlebox answering for every address.
 CANARY_IP = "198.51.100.1"
 
 
 async def intercepted_ports(ports: List[int], timeout: float,
                             canary: str = CANARY_IP) -> set:
-    """Ports on which a transparent proxy/middlebox accepts TCP for a non-existent IP."""
+    """Ports on which a middlebox accepts TCP for an address that cannot exist."""
     canary_timeout = min(timeout, 1.5)
     results = await asyncio.gather(*(_accepts_tcp(canary, p, canary_timeout) for p in ports))
     return {p for p, ok in zip(ports, results) if ok}

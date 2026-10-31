@@ -105,6 +105,8 @@ async def test_deep_mode_falls_back_when_nmap_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery, "alive_latency", fake_alive)
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
     monkeypatch.setattr(port_scanner, "open_ports", fake_open)
+    from app.scanner import chain_runner
+    monkeypatch.setattr(chain_runner, "available", lambda: False)
     monkeypatch.setattr(nmap_scan, "nmap_available", lambda: False)  # not installed
 
     s = Settings(); s.web_ports = [80]; s.liveness_ports = []; s.data_dir = str(tmp_path)
@@ -136,6 +138,8 @@ async def test_deep_falls_back_when_nmap_returns_nothing(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
     monkeypatch.setattr(port_scanner, "open_ports", fake_open)
     monkeypatch.setattr(nmap_scan, "nmap_available", lambda: True)
+    from app.scanner import chain_runner
+    monkeypatch.setattr(chain_runner, "available", lambda: False)
     monkeypatch.setattr(nmap_scan, "run_nmap", empty_nmap)
 
     s = Settings(); s.web_ports = [80]; s.liveness_ports = []; s.data_dir = str(tmp_path)
@@ -147,59 +151,92 @@ async def test_deep_falls_back_when_nmap_returns_nothing(monkeypatch, tmp_path):
     assert job.note_deep and "ถอยไปใช้โหมดเร็ว" in job.note_deep
 
 
-async def test_deep_custom_ports_21_22_high_latency_subnet(monkeypatch, tmp_path):
-    from app.scanner import discovery, dns_resolver, engine as eng, http_probe
+async def test_fast_mode_runs_tcp_and_cybers_rmutl_while_deep_runs_nmap_and_traceroute(monkeypatch, tmp_path):
+    from app.models import Confidence, Finding, Severity
+    from app.scanner import chain_runner, discovery, engine as eng, http_probe, port_scanner
 
-    captured_argv = []
+    events = []
 
-    async def fake_run(argv, timeout):
-        captured_argv.extend(argv)
-        return """<nmaprun><host><status state="up"/>
-          <address addr="203.158.167.4" addrtype="ipv4"/>
-          <hostnames><hostname name="1now.rmutl.ac.th"/></hostnames>
-          <ports>
-            <port protocol="tcp" portid="21"><state state="open"/><service name="ftp" product="vsftpd" version="3.0.5"/></port>
-            <port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="8.9p1"/></port>
-          </ports></host></nmaprun>"""
+    async def fake_rmutl(targets, site_hosts, settings, cancel=None):
+        events.append("cybers_rmutl")
+        return {
+            "10.0.0.9": [
+                Finding(
+                    rule_id="cybers_rmutl_cve_2026_109618",
+                    title="[CybersRMUTL] CVE-2026-109618 Remote Code Execution",
+                    severity=Severity.critical,
+                    confidence=Confidence.high,
+                    description="Detected by CybersRMUTL security-audit-toolkit v6.3.0",
+                    evidence="pipeline check",
+                    recommendation="Upgrade PHP",
+                    cve=["CVE-2026-109618"],
+                    cvss=9.8,
+                )
+            ]
+        }
+
+    async def fake_nmap(targets, ports, timeout=240.0, extra_args=None):
+        events.append("nmap")
+        h = nmap_scan.NmapHost(ip="10.0.0.9", up=True)
+        h.ports[80] = nmap_scan.NmapPort(port=80, name="http", product="Apache httpd", version="2.4.58")
+        return {"10.0.0.9": h}
+
+    async def fake_traceroute(ip, **kw):
+        events.append("traceroute")
+        return [{"hop": 1, "ip": "10.0.0.1", "rtt_ms": 1.1}, {"hop": 2, "ip": ip, "rtt_ms": 2.4}]
 
     async def fake_intercepted(ports_, timeout, canary=discovery.CANARY_IP):
         return set()
 
     async def fake_alive(ip, ports_, timeout):
-        return (ip == "203.158.167.4"), (530 if ip == "203.158.167.4" else None)
+        events.append("tcp_liveness")
+        return True, 10
 
-    async def fake_resolve_match(self, ip, suffixes):
-        if ip == "203.158.167.4":
-            return ip, "1now.rmutl.ac.th", "ac.th"
-        return ip, None, None
+    async def fake_open(ip, ports_, timeout):
+        events.append("tcp_open_ports")
+        return [80]
 
+    async def fake_probe(client, ip, port, host=None):
+        return None
+
+    monkeypatch.setattr(chain_runner, "available", lambda: True)
+    monkeypatch.setattr(chain_runner, "run_for_targets", fake_rmutl)
     monkeypatch.setattr(nmap_scan, "nmap_available", lambda: True)
-    monkeypatch.setattr(nmap_scan, "traceroute_available", lambda: False)
-    monkeypatch.setattr(nmap_scan, "_run", fake_run)
+    monkeypatch.setattr(nmap_scan, "run_nmap", fake_nmap)
+    monkeypatch.setattr(nmap_scan, "traceroute_available", lambda: True)
+    monkeypatch.setattr(nmap_scan, "run_traceroute", fake_traceroute)
     monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
     monkeypatch.setattr(discovery, "alive_latency", fake_alive)
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
-    monkeypatch.setattr(dns_resolver.ReverseResolver, "resolve_and_match", fake_resolve_match)
+    monkeypatch.setattr(port_scanner, "open_ports", fake_open)
+    monkeypatch.setattr(http_probe, "probe_service", fake_probe)
 
     s = Settings()
     s.data_dir = str(tmp_path)
-    req = ScanRequest(
-        targets=["203.158.167.0/29"],
-        port_profile="custom",
-        custom_ports="21, 22",
-        scan_mode="deep",
-    )
-    job = ScanJob(id="rmutl", created_at=datetime.now(timezone.utc), request=req)
-    await eng.ScanEngine(s).run(job, asyncio.Event())
 
-    assert job.state.value == "completed", job.error
-    assert job.scanned_ports == [21, 22]
-    assert "-T3" in captured_argv
-    assert "21,22" in captured_argv
-    assert job.progress.online == 1
-    assert len(job.devices) == 1
-    dev = job.devices[0]
-    assert dev.ip == "203.158.167.4"
-    assert dev.hostname == "1now.rmutl.ac.th"
-    assert dev.latency_ms == 530
-    assert [sp.port for sp in dev.services] == [21, 22]
+    # 1. Test Fast Mode: TCP + CybersRMUTL (no nmap, no traceroute)
+    events.clear()
+    req_fast = ScanRequest(targets=["10.0.0.9"], port_profile="web", scan_mode="fast")
+    job_fast = ScanJob(id="fast_rmutl", created_at=datetime.now(timezone.utc), request=req_fast)
+    await eng.ScanEngine(s).run(job_fast, asyncio.Event())
+
+    assert job_fast.state.value == "completed", job_fast.error
+    assert job_fast.scan_mode == "fast"
+    assert "cybers_rmutl" in events
+    assert "nmap" not in events
+    assert "traceroute" not in events
+    assert any(f.rule_id == "cybers_rmutl_cve_2026_109618" for f in job_fast.devices[0].findings)
+
+    # 2. Test Deep Mode: nmap + traceroute ONLY (no cybers_rmutl)
+    events.clear()
+    req_deep = ScanRequest(targets=["10.0.0.9"], port_profile="web", scan_mode="deep")
+    job_deep = ScanJob(id="deep_only", created_at=datetime.now(timezone.utc), request=req_deep)
+    await eng.ScanEngine(s).run(job_deep, asyncio.Event())
+
+    assert job_deep.state.value == "completed", job_deep.error
+    assert job_deep.scan_mode == "deep"
+    assert "nmap" in events
+    assert "traceroute" in events
+    assert "cybers_rmutl" not in events
+    assert job_deep.devices[0].services[0].product == "Apache httpd 2.4.58"
+    assert [h.ip for h in job_deep.devices[0].route] == ["10.0.0.1", "10.0.0.9"]

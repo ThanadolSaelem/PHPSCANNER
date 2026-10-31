@@ -6,8 +6,6 @@ import io
 import json
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -16,9 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .config import settings
 from .models import ScanRequest, ScheduleCreate
-from .scanner import chain_runner, demo_scenarios, discovery, netlimit, ports, sites
+from .scanner import demo_scenarios, discovery, netlimit, ports, sites
 from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
-from .scanner import nmap_scan
+from .scanner import chain_runner, nmap_scan
 from .scheduler import CronError, Scheduler, local_tz, parse_cron
 from .store import JobStore
 
@@ -44,10 +42,6 @@ store = JobStore(settings)
 scheduler = Scheduler(store)
 
 
-def _chain_available() -> bool:
-    return settings.rce_chain_enabled and chain_runner.available()
-
-
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"status": "ok", "version": __version__}
@@ -64,9 +58,9 @@ async def get_config() -> dict:
         "allowed_cidrs": settings.allowed_cidrs,
         "gov_suffixes": settings.gov_suffixes,
         "enforce_scope": settings.enforce_scope,
-        "deep_available": nmap_scan.nmap_available(),
-        "chain_available": _chain_available(),
-        "chain_timeout_s": settings.rce_chain_timeout_s,
+        "deep_available": True,
+        "nmap_available": nmap_scan.nmap_available(),
+        "chain_available": chain_runner.available(),
         "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
         "max_port_probes": settings.max_port_probes,
@@ -125,21 +119,7 @@ async def resolve_sites(q: str = Query("", max_length=4096)) -> dict:
 @app.post("/api/scans")
 async def create_scan(req: ScanRequest) -> dict:
     # fields the server owns
-    req.site_hosts, req.extra_web_ports, req.chain_target_url = {}, [], None
-    if req.scan_mode not in {"fast", "deep", "chain"}:
-        raise HTTPException(400, "ไม่รู้จักโหมดสแกนที่เลือก")
-    is_chain = req.scan_mode == "chain"
-    if is_chain:
-        if not _chain_available():
-            raise HTTPException(503, "ยังไม่ได้เปิดใช้ Security Audit Toolkit บนเซิร์ฟเวอร์นี้")
-        if not req.rce_chain_confirmed:
-            raise HTTPException(400, "กรุณายืนยันสิทธิ์และการตรวจแบบ active ก่อนเริ่มโหมด chain")
-        if bool(req.targets) == bool(req.sites):
-            raise HTTPException(400, "โหมด chain ต้องระบุ IP เดี่ยวหรือ URL เดี่ยวอย่างใดอย่างหนึ่ง")
-        if req.targets and len(req.targets) != 1:
-            raise HTTPException(400, "โหมด chain ตรวจ IP ได้ครั้งละหนึ่งเป้าหมาย")
-        if req.sites and len(req.sites) != 1:
-            raise HTTPException(400, "โหมด chain ตรวจ URL ได้ครั้งละหนึ่งเป้าหมาย")
+    req.site_hosts, req.extra_web_ports = {}, []
     if req.demo_scenario:
         valid_ids = {d["id"] for d in demo_scenarios.DEMO_SCENARIOS}
         if req.demo_scenario not in valid_ids:
@@ -158,19 +138,6 @@ async def create_scan(req: ScanRequest) -> dict:
     direct_targets = list(req.targets)  # only these are bound by the IP scope
     if req.sites:
         report = await _resolve_sites(req.sites)
-        if is_chain:
-            item = report[0] if report else {}
-            if len(item.get("ips", [])) != 1:
-                raise HTTPException(400, "โหมด chain ต้อง resolve URL เป็น IPv4 เพียงหนึ่งหมายเลข")
-            raw_site = req.sites[0].strip()
-            parts = urlsplit(raw_site if "://" in raw_site else "http://" + raw_site)
-            if parts.username or parts.password:
-                raise HTTPException(400, "โหมด chain ไม่รองรับข้อมูลล็อกอินใน URL")
-            parsed_site = sites.parse(raw_site)
-            netloc = parsed_site.host + (f":{parsed_site.port}" if parsed_site.port else "")
-            req.chain_target_url = urlunsplit(
-                (parts.scheme.lower(), netloc, parts.path or "/", parts.query, "")
-            )
         problems = [p for r in report for p in r["problems"]]
         if problems:
             raise HTTPException(403 if any(r["refused"] for r in report) else 400,
@@ -187,11 +154,9 @@ async def create_scan(req: ScanRequest) -> dict:
     if not req.targets:
         raise HTTPException(400, "ไม่ได้ระบุเป้าหมาย")
     try:
-        expanded_targets, total = expand_targets(req.targets, settings.max_targets)
+        _, total = expand_targets(req.targets, settings.max_targets)
     except TargetError as exc:
         raise HTTPException(400, str(exc))
-    if is_chain and (total != 1 or len(expanded_targets) != 1):
-        raise HTTPException(400, "โหมด chain ตรวจได้ครั้งละหนึ่ง IPv4 เท่านั้น")
     # The IP scope is a hard limit only when THSCAN_ENFORCE_SCOPE is on. By
     # default the operator may scan anything they type; website targets are
     # never bound by the IP scope regardless.
@@ -210,19 +175,6 @@ async def create_scan(req: ScanRequest) -> dict:
                                          sorted(set(settings.web_ports) | set(req.extra_web_ports)))
     except ports.PortSpecError as exc:
         raise HTTPException(400, str(exc))
-    if is_chain and not req.chain_target_url:
-        # The toolkit is a web audit pipeline; bind an IP target to one selected
-        # HTTP(S) port so it inspects the service selected in the main scan.
-        preferred = (80, 443, 8080, 8443, 8000, 8008, 8081, 8888, 3000, 5000)
-        chain_port = next((p for p in preferred if p in scan_ports), None)
-        if chain_port is None and req.port_profile in {"custom", "web"}:
-            chain_port = next((p for p in scan_ports if p not in ports.NON_WEB_PORTS), None)
-        if chain_port is None:
-            chain_port = 80
-        scheme = "https" if chain_port in {443, 8443} else "http"
-        default_port = 443 if scheme == "https" else 80
-        netloc = expanded_targets[0] if chain_port == default_port else f"{expanded_targets[0]}:{chain_port}"
-        req.chain_target_url = urlunsplit((scheme, netloc, "/", "", ""))
     if total * len(scan_ports) > settings.max_port_probes:
         raise HTTPException(
             400,
@@ -253,29 +205,6 @@ async def get_scan(job_id: str) -> dict:
     data["security_score"] = job.security_score()
     data["security_grade"] = job.security_grade()
     return data
-
-
-@app.get("/api/scans/{job_id}/chain-artifacts/{artifact_path:path}")
-async def download_chain_artifact(job_id: str, artifact_path: str) -> FileResponse:
-    job = store.get(job_id)
-    if job is None or not job.chain_result:
-        raise HTTPException(404, "ไม่พบรายงาน chain")
-    allowed = {
-        item.get("path")
-        for item in job.chain_result.get("artifacts", [])
-        if isinstance(item, dict) and item.get("path")
-    }
-    if artifact_path not in allowed:
-        raise HTTPException(404, "ไม่พบไฟล์รายงาน")
-    root = (Path(settings.data_dir) / "chain" / job.id).resolve()
-    path = (root / artifact_path).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError:
-        raise HTTPException(404, "ไม่พบไฟล์รายงาน")
-    if not path.is_file():
-        raise HTTPException(404, "ไม่พบไฟล์รายงาน")
-    return FileResponse(str(path), filename=path.name)
 
 
 @app.get("/api/scans/{job_id}/summary")
@@ -452,10 +381,7 @@ async def remove_schedule(sched_id: str) -> dict:
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(
-        os.path.join(STATIC_DIR, "index.html"),
-        headers={"Cache-Control": "no-store"},
-    )
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

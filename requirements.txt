@@ -1,4 +1,4 @@
-# Tested on Python 3.11 – 3.14 (all have prebuilt wheels; no compiler needed)
+# Tested on Python 3.11 – 3.14 (prebuilt binary wheels)
 fastapi>=0.115.0
 starlette>=0.40.0
 uvicorn[standard]>=0.30.0
@@ -7,3 +7,4 @@ dnspython>=2.6.0
 pydantic>=2.7.0
 PyYAML>=6.0
 tzdata>=2024.1
+requests>=2.31.0

@@ -1,4 +1,7 @@
-"""Scan orchestration: liveness -> MAC/DNS/ports -> web probe -> assessment."""
+"""Scan orchestration:
+- Fast Mode ("fast"): TCP connect liveness & port scan + HTTP/PHP probe + CybersRMUTL (security-audit-toolkit)
+- Deep Mode ("deep"): Nmap service/version scan (-sT -sV) + Traceroute network path mapping
+"""
 from __future__ import annotations
 
 import asyncio
@@ -100,9 +103,6 @@ class ScanEngine:
         if req.port_profile == "custom" and req.extra_web_ports:
             scan_ports = sorted(set(scan_ports) | set(req.extra_web_ports))
         job.scanned_ports = scan_ports
-        # When the operator selects "custom" ports (e.g. "21, 22"), probe only
-        # those ports for both liveness and inspection so we don't trigger
-        # remote firewall rate-limits with 7 extra unrequested ports.
         if req.port_profile == "custom":
             live_ports = list(scan_ports)
         else:
@@ -110,30 +110,24 @@ class ScanEngine:
         resolver = dns_resolver.ReverseResolver(timeout=1.5)
         devices: List[Device] = []
 
-        # Deep and chain modes share Nmap service discovery when available.
-        # The chain pipeline still runs if Nmap is absent or returns no hosts.
-        deep_requested = req.scan_mode in {"deep", "chain"}
-        deep = deep_requested and nmap_scan.nmap_available()
-        if deep_requested and not deep:
-            job.note_deep = (
-                "ไม่มี nmap — โหมด chain จะใช้ TCP discovery ก่อนทำ toolkit"
-                if req.scan_mode == "chain"
-                else "เครื่องนี้ยังไม่ได้ติดตั้ง nmap — ใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน"
-            )
+        # Deep mode: nmap (-sT -sV) + traceroute ONLY
+        # Fast mode: TCP connect + CybersRMUTL (security-audit-toolkit)
+        want_deep = req.scan_mode == "deep"
+        deep = want_deep and nmap_scan.nmap_available()
+        if want_deep and not deep:
+            job.note_deep = "เครื่องนี้ยังไม่ได้ติดตั้ง nmap — ใช้โหมดเร็ว (TCP + CybersRMUTL) แทน"
         nmap_map: Dict[str, nmap_scan.NmapHost] = {}
         if deep:
+            job.progress.phase = "nmap"
             budget = min(1800.0, 120.0 + 0.3 * total * len(scan_ports))
             nmap_map = await nmap_scan.run_nmap(req.targets, scan_ports, timeout=budget)
             if not nmap_map:
                 job.note_deep = (
                     "nmap ไม่คืนผล (หมดเวลา เป้าหมายบล็อก หรือเครือข่ายที่รัน thscan "
-                    "ออกไปหา nmap ไม่ได้) — ใช้ TCP discovery แทน"
+                    "ออกไปหา nmap ไม่ได้) — ถอยไปใช้โหมดเร็ว (เชื่อมต่อ TCP) แทน"
                 )
                 deep = False
-        # Keep chain mode visible even when Nmap falls back to TCP discovery.
-        job.scan_mode = (
-            "chain" if req.scan_mode == "chain" else ("deep" if deep else "fast")
-        )
+        job.scan_mode = "deep" if deep else "fast"
 
         async with http_probe.build_client(s.http_timeout, s.connect_timeout) as client:
             # Phase 0: is a proxy/firewall answering for every address?
@@ -159,8 +153,7 @@ class ScanEngine:
                     host = nmap_map.get(ip)
                     up = bool(host and host.ports)
                     latency = None
-                    if up:
-                        # Measure quick latency on the first open port reported by nmap
+                    if up and host and host.ports:
                         first_port = sorted(host.ports)[0]
                         _, latency = await discovery.alive_latency(ip, [first_port], s.connect_timeout)
                     verified = up
@@ -173,8 +166,6 @@ class ScanEngine:
                     up, latency = await discovery.alive_latency(ip, clean_ports, s.connect_timeout)
                     verified = up
                     if not up and blocked:
-                        # only intercepted ports answered: a candidate that must
-                        # prove itself with a genuine web response
                         up, latency = await discovery.alive_latency(ip, sorted(blocked), s.connect_timeout)
                 job.progress.probed += 1
                 if up:
@@ -185,6 +176,26 @@ class ScanEngine:
             await asyncio.gather(*(liveness(ip) for ip in ips))
             if cancel.is_set():
                 return
+
+            # Fast Mode includes CybersRMUTL (security-audit-toolkit) without waiting for nmap
+            chain_map: Dict[str, List[Finding]] = {}
+            if not deep and chain_runner.available() and not cancel.is_set():
+                job.progress.phase = "cybers_rmutl"
+                rmutl_targets = [ip for ip, _, _ in live] or (ips if len(ips) <= 16 else [])
+                if rmutl_targets:
+                    chain_map = await chain_runner.run_for_targets(
+                        rmutl_targets, req.site_hosts, s, cancel
+                    )
+                    live_ips = {ip for ip, _, _ in live}
+                    for cip in chain_map:
+                        if cip not in live_ips:
+                            live.append((cip, None, True))
+                            job.progress.online += 1
+                    job.chain_result = {
+                        "ran": True,
+                        "hosts_flagged": len(chain_map),
+                        "vulnerability_count": sum(len(v) for v in chain_map.values()),
+                    }
 
             arp = discovery.read_arp_table()
 
@@ -212,14 +223,12 @@ class ScanEngine:
                             lookup,
                         )
 
-                    findings = []
+                    # Attach any findings from CybersRMUTL (Fast Mode)
+                    findings: List[Finding] = list(chain_map.get(ip, []))
+                    seen_rules: set[str] = {f.rule_id for f in findings}
                     web_open: List[int] = []
                     php_version = server = cms = runtime = None
                     merged_headers: Dict[str, str] = {}
-                    seen_rules: set[str] = set()
-                    # probe HTTP on every open port that isn't a known non-web
-                    # service — PHP on a custom port (e.g. 18080) must be read,
-                    # not just standard web ports
                     probe_ports = [p for p in open_all if p not in ports.NON_WEB_PORTS]
                     for port in probe_ports:
                         if site_host:
@@ -229,7 +238,7 @@ class ScanEngine:
                         if wr is None:
                             continue
                         if port in canary_fp and wr.fingerprint == canary_fp[port]:
-                            continue  # the middlebox answered, not the host
+                            continue
                         web_open.append(port)
                         php_version = php_version or wr.php_version
                         runtime = runtime or wr.runtime
@@ -246,12 +255,10 @@ class ScanEngine:
                 job.progress.inspected += 1
 
                 if not verified:
-                    if not web_open:
-                        return  # phantom: only the middlebox answered
+                    if not web_open and not findings:
+                        return
                     job.progress.online += 1
 
-                # ports a middlebox answers for prove nothing; keep them only
-                # when a genuine web response came back on them
                 found = sorted({p for p in open_all if p not in blocked} | set(web_open))
                 nhost = nmap_map.get(ip) if deep else None
                 services = []
@@ -263,8 +270,6 @@ class ScanEngine:
                             sp.name = np.name.upper() if len(np.name) <= 5 else np.name
                         sp.product = np.label() or None
                     services.append(sp)
-                # deep mode: nmap -sV can read PHP even when our header probe
-                # could not — use it so the PHP2Shell check still runs
                 if nhost and not php_version:
                     for np in nhost.ports.values():
                         m = re.search(r"PHP[/ ]?(\d+\.\d+\.\d+)", f"{np.extra} {np.version} {np.product}")
@@ -297,13 +302,14 @@ class ScanEngine:
                     severity=severity,
                     assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
                     findings=findings, headers=merged_headers,
+                    chain_result={"findings": len(chain_map.get(ip, []))} if ip in chain_map else None,
                 ))
                 if severity != Severity.safe:
                     job.progress.risks += 1
 
             await asyncio.gather(*(inspect(ip, lat, ver) for ip, lat, ver in live))
 
-            # Deep mode: map the network path to a capped number of live hosts
+            # Deep mode: map the network path via traceroute
             if deep and devices and nmap_scan.traceroute_available() and not cancel.is_set():
                 job.progress.phase = "traceroute"
                 cap = getattr(s, "traceroute_max", 16)
@@ -317,85 +323,6 @@ class ScanEngine:
                     dev.route = [RouteHop(hop=h["hop"], ip=h["ip"], rtt_ms=h["rtt_ms"]) for h in hops]
 
                 await asyncio.gather(*(trace(d) for d in devices[:cap]))
-
-        if req.scan_mode == "chain" and not cancel.is_set():
-            job.progress.phase = "chain"
-            job.progress.to_inspect = 1
-            job.progress.inspected = 0
-            target_ip = ips[0]
-            target_url = req.chain_target_url or req.sites[0]
-            chain_result = await chain_runner.run_chain(
-                s, job.id, target_url, target_ip,
-                req.site_hosts.get(target_ip) or target_ip, cancel
-            )
-            job.chain_result = chain_result
-            if cancel.is_set():
-                return
-
-            device = next((item for item in devices if item.ip == target_ip), None)
-            if device is None and chain_result.get("reachable"):
-                php_version = chain_result.get("php_version") or None
-                device = Device(
-                    ip=target_ip,
-                    hostname=req.site_hosts.get(target_ip),
-                    up=True,
-                    device_type="Web Server",
-                    service="HTTP",
-                    server=chain_result.get("server") or None,
-                    php_version=php_version,
-                    runtime=f"PHP {php_version}" if php_version else None,
-                    severity=Severity.safe,
-                    assessment="พบเว็บที่ตอบสนองจากการตรวจแบบ chain",
-                )
-                devices.append(device)
-                job.progress.online = max(job.progress.online, 1)
-
-            if device is not None:
-                seen_chain_rules = {finding.rule_id for finding in device.findings}
-                for item in chain_result.get("findings", []):
-                    if not item.get("risk"):
-                        continue
-                    cve = str(item.get("cve") or "unknown")
-                    rule_id = f"security-audit:{cve}"
-                    if rule_id in seen_chain_rules:
-                        continue
-                    try:
-                        severity = Severity(item.get("severity", "low"))
-                        confidence = Confidence(item.get("confidence", "low"))
-                    except ValueError:
-                        continue
-                    device.findings.append(Finding(
-                        rule_id=rule_id,
-                        title=str(item.get("title") or cve),
-                        severity=severity,
-                        confidence=confidence,
-                        description=(
-                            f"Security Audit Toolkit v6.3.0 · {item.get('status', 'unknown')}. "
-                            f"{item.get('description', '')}"
-                        ).strip(),
-                        evidence=str(item.get("evidence") or ""),
-                        recommendation=str(item.get("recommendation") or ""),
-                        cve=[cve] if cve.startswith("CVE-") else [],
-                        cvss=item.get("cvss"),
-                    ))
-                    seen_chain_rules.add(rule_id)
-                device.severity = vuln_rules.device_severity(device.findings)
-                chain_risk_count = sum(
-                    1 for item in chain_result.get("findings", []) if item.get("risk")
-                )
-                device.assessment = (
-                    f"Security Audit Toolkit v6.3.0 พบความเสี่ยง {chain_risk_count} รายการ"
-                    if chain_risk_count
-                    else vuln_rules.thaicert_assessment(
-                        device.severity,
-                        bool(device.open_ports) or device.service == "HTTP",
-                        device.findings,
-                    )
-                )
-            job.progress.inspected = 1
-            job.progress.risks = sum(
-                1 for item in devices if item.severity != Severity.safe
-            )
 
         order = {
             Severity.critical: 0,
