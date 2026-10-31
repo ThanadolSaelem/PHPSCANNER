@@ -18,7 +18,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 # GitHub source archives can be slow on institutional links; retry transient reads.
-RUN pip install --no-cache-dir --retries 5 --timeout 180 -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefer-binary --retries 10 --timeout 180 -r requirements.txt
 
 COPY app ./app
 COPY static ./static
