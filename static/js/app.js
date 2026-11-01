@@ -316,10 +316,66 @@ async function route() {
     await hit[1](params.slice(1), alive);
   } catch (e) {
     if (!alive()) return;
-    render(`<div class="app thin"><div class="card in1" style="padding:32px;text-align:center">
-      <h1 class="h1" style="font-size:24px">${e.status === 404 ? "ไม่พบข้อมูลนี้" : "โหลดข้อมูลไม่สำเร็จ"}</h1>
-      <p class="lead">${esc(e.message)}</p><p style="margin-top:18px"><a class="btn" href="#/">กลับหน้าสแกน</a></p></div></div>`);
+    renderErrorPage(e);
   }
+}
+function renderErrorPage(e) {
+  const status = e && e.status;
+  const rawMsg = String((e && e.message) || e || "ไม่ทราบสาเหตุ");
+  const isRuntime = /null is not an object|undefined is not an object|Cannot read prop|is not a function|SyntaxError|TypeError/i.test(rawMsg);
+  const isOffline = /เชื่อมต่อเซิร์ฟเวอร์|Failed to fetch|NetworkError/i.test(rawMsg);
+  let icon = "alert", badgeCls = "b-bad", badgeText = "เกิดข้อผิดพลาด", title = "โหลดข้อมูลไม่สำเร็จ", desc = rawMsg;
+  if (status === 404) {
+    icon = "search"; badgeCls = "b-warn"; badgeText = "ไม่พบข้อมูล (404)";
+    title = "ไม่พบรายการสแกนหรือข้อมูลที่ต้องการ";
+    desc = "รายการนี้อาจถูกลบออกจากประวัติการสแกนแล้ว หรือลิงก์ที่คุณเปิดไม่ถูกต้อง";
+  } else if (isOffline) {
+    icon = "warn"; badgeCls = "b-warn"; badgeText = "ขาดการเชื่อมต่อ";
+    title = "ยังเชื่อมต่อเซิร์ฟเวอร์สแกนไม่ได้";
+    desc = "กรุณาตรวจสอบว่าเซิร์ฟเวอร์ thscan กำลังทำงานอยู่ แล้วกดลองใหม่อีกครั้ง";
+  } else if (status === 400 || status === 403) {
+    icon = "shield"; badgeCls = "b-warn"; badgeText = status === 403 ? "อยู่นอกขอบเขต" : "ข้อมูลไม่ถูกต้อง";
+    title = status === 403 ? "เป้าหมายอยู่นอกขอบเขตที่อนุญาต" : "รูปแบบข้อมูลที่ระบุไม่ถูกต้อง";
+    desc = rawMsg;
+  } else if (isRuntime) {
+    icon = "refresh"; badgeCls = "b-blue"; badgeText = "กำลังซิงก์หน้าจอ";
+    title = "หน้าจอเกิดการขัดจังหวะชั่วคราว";
+    desc = "ระบบกำลังเปลี่ยนหน้าหรืออัปเดตสถานะการสแกน กด “ลองใหม่อีกครั้ง” หรือกลับไปหน้าสแกนเพื่อทำงานต่อได้ทันที";
+  }
+  render(`<div class="app thin"><div class="card in1" style="padding:38px 32px;text-align:center">
+    <div style="width:56px;height:56px;margin:0 auto 14px;border-radius:18px;display:grid;place-items:center;background:var(--soft);color:var(--blue-ink)">${ic(icon, 26, 2.2)}</div>
+    <span class="badge ${badgeCls}" style="font-size:12.5px;padding:5px 11px">${esc(badgeText)}</span>
+    <h1 class="h1" style="margin-top:12px;font-size:24px">${esc(title)}</h1>
+    <p class="lead" style="max-width:480px;margin:8px auto 0">${esc(desc)}</p>
+    <div style="margin-top:22px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button type="button" class="btn btn-g" id="err-retry">${ic("refresh", 17)}ลองใหม่อีกครั้ง</button>
+      <a class="btn" href="#/">${ic("back", 17)}กลับหน้าสแกน</a>
+      <a class="btn" href="#/history">ดูประวัติ</a>
+    </div>
+    ${isRuntime ? `<details class="raw" style="margin-top:18px;text-align:left"><summary>รายละเอียดทางเทคนิค</summary><div class="evidence">${esc(rawMsg)}</div></details>` : ""}
+  </div></div>`);
+  const retryBtn = $("#err-retry");
+  if (retryBtn) retryBtn.addEventListener("click", () => route());
+}
+function prefillSingleHostScan(ip, job) {
+  const parts = String(ip || "").trim().split(".");
+  if (parts.length === 4) {
+    S.init = true;
+    S.mode = "single";
+    S.single = parts;
+    S.oct = [...parts.slice(0, 3), "0"];
+    if (!S.speed) S.speed = (cfg && cfg.max_concurrency) || 50;
+  }
+  if (job && job.request) {
+    const r = job.request;
+    if (r.port_profile) S.profile = r.port_profile;
+    if (r.custom_ports) S.custom = r.custom_ports;
+    if (r.scan_mode) S.mode2 = r.scan_mode === "deep" ? "deep" : "fast";
+  }
+  S.swap = 1 - S.swap;
+  if (location.hash === "#/" || location.hash === "") route();
+  else location.hash = "#/";
+  toast(`ตั้งค่าเป้าหมายเป็นเครื่องเดียว (${ip}) แล้ว — กด “เริ่มสแกน” ได้เลย`);
 }
 function render(html) { app.innerHTML = html; scrollTo(0, 0); fitAll(); }
 // folded panels still take up layout space, so place them inside the viewport up front
@@ -624,7 +680,7 @@ function renderPortsPanel() {
 function renderAdvPanel() {
   const deepOff = !cfg.nmap_available && !cfg.deep_available;
   $("#p-adv").innerHTML = `<div class="stag">
-    <div class="ptitle">วิธีสแกน ${tip("โหมดรวดเร็ว = ตรวจพอร์ตและช่องโหว่ได้อย่างรวดเร็ว · โหมดเชิงลึก = ตรวจรายละเอียดเวอร์ชันบริการและสำรวจเส้นทางเครือข่ายเพิ่มเติม")}</div>
+    <div class="ptitle">วิธีสแกน ${tip("เร็ว = เชื่อมต่อ TCP ร่วมกับชุดตรวจช่องโหว่ CybersRMUTL ทันทีโดยไม่ต้องรอ nmap · ลึก = ใช้ nmap อ่านชนิด/เวอร์ชันบริการ และ traceroute วาดเส้นทางเครือข่าย")}</div>
     <div role="group" aria-label="วิธีสแกน" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">โหมดรวดเร็ว</span><span class="od">ตรวจพอร์ตและช่องโหว่มาตรฐาน</span></span></button>
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
@@ -789,7 +845,8 @@ async function viewScanning([id], alive) {
   // the plate shows the probed fraction only; mid-scan the API does not say which addresses answered
   let lastSteps = "", lastPhase = "", stopping = false;
   const paint = (s) => {
-    const p = s.progress, total = Math.max(1, p.total_ips), inspect = p.phase === "inspect";
+    if (!$("#sc-todo") || !$("#sc-done") || !$("#sc-ring") || !$("#sc-pct")) return;
+    const p = s.progress || {}, total = Math.max(1, p.total_ips || 1), inspect = ["inspect", "cybers_rmutl", "traceroute"].includes(p.phase);
     const frac1 = Math.min(1, p.probed / total), frac2 = inspect ? (p.to_inspect ? p.inspected / p.to_inspect : 1) : 0;
     const pct = inspect ? 55 + Math.round(frac2 * 43) : Math.round(frac1 * 55);
     const stage = !p.phase ? 0 : inspect ? 2 : 1;
@@ -1012,9 +1069,10 @@ function paintHost() {
     <span class="tabbar" aria-hidden="true" id="tabbar"></span></div>
   <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
   <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">
-    <button type="button" class="btn" id="recheck">${ic("refresh", 17)}<span>${demo ? "จำลองการแก้ไข (ตัวอย่าง)" : "ตรวจซ้ำเครื่องนี้"}</span></button>
+    <button type="button" class="btn btn-g" id="recheck">${ic("refresh", 17)}<span>ตรวจซ้ำเครื่องนี้ (${esc(d.ip)})</span></button>
+    ${demo ? `<button type="button" class="btn" id="sim-patch">${ic("check", 17)}<span>จำลองการแก้ไข (ตัวอย่าง)</span></button>` : ""}
     <button type="button" class="btn" id="copy">${ic("copy", 17)}<span>คัดลอกสรุป</span></button>
-    <span class="muted" style="font-size:12.5px">${d.checked_at ? `ตรวจซ้ำล่าสุด ${esc(fmtDate(d.checked_at))}` : d.patched_at ? `จำลองการแก้ไขเมื่อ ${esc(fmtDate(d.patched_at))} (ตัวอย่าง)` : demo ? "" : "“ตรวจซ้ำ” จะสแกนเครื่องนี้ใหม่จริงอีกครั้ง"}</span>
+    <span class="muted" style="font-size:12.5px">${d.checked_at ? `ตรวจซ้ำล่าสุด ${esc(fmtDate(d.checked_at))}` : d.patched_at ? `จำลองการแก้ไขเมื่อ ${esc(fmtDate(d.patched_at))} (ตัวอย่าง)` : "กดเพื่อพาไปหน้าสแกนพร้อมกรอก IP เครื่องนี้ให้อัตโนมัติ"}</span>
   </div>`;
   paintTabs();
   $("#copy").addEventListener("click", async () => {
@@ -1024,16 +1082,17 @@ function paintHost() {
     if (demo) lines.unshift("[ตัวอย่าง · ข้อมูลจำลอง]");
     toast((await copyText(lines.join("\n"))) ? "คัดลอกสรุปแล้ว" : "คัดลอกไม่สำเร็จ");
   });
-  $("#recheck").addEventListener("click", async (e) => {
+  $("#recheck").addEventListener("click", () => {
+    prefillSingleHostScan(d.ip, R.job);
+  });
+  const simBtn = $("#sim-patch");
+  if (simBtn) simBtn.addEventListener("click", async (e) => {
     const b = e.currentTarget, label = $("span", b), was = label.textContent;
-    b.disabled = true; label.textContent = demo ? "กำลังจำลอง…" : "กำลังตรวจซ้ำ…";
+    b.disabled = true; label.textContent = "กำลังจำลอง…";
     try {
       const res = await api(`/api/scans/${R.job.id}/devices/${encodeURIComponent(d.ip)}/recheck`, { method: "POST" });
       R.job = res.job;
-      const after = res.device.severity;
-      if (res.simulated) toast("จำลองการแก้ไขแล้ว — นี่คือข้อมูลตัวอย่าง ไม่ใช่ผลจริง");
-      else if (!res.online) toast("เครื่องนี้ไม่ตอบสนองในตอนนี้ — ยังคงแสดงผลเดิมไว้");
-      else toast(after === res.severity_before ? `ตรวจซ้ำแล้ว: ผลยังเป็น “${SEV[after].word}”` : `ตรวจซ้ำแล้ว: ${SEV[res.severity_before].word} → ${SEV[after].word}`);
+      toast("จำลองการแก้ไขแล้ว — นี่คือข้อมูลตัวอย่าง ไม่ใช่ผลจริง");
       R.sel = d.ip; renderResults();
     } catch (err) { toast(err.message); b.disabled = false; label.textContent = was; }
   });
