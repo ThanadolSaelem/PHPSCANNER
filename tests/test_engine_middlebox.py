@@ -1,3 +1,4 @@
+from app.scanner import chain_runner
 """The engine must not report phantom devices when a proxy/firewall answers
 for every address (e.g. a transparent proxy on 80/443)."""
 import asyncio
@@ -33,6 +34,7 @@ async def test_phantom_hosts_are_dropped(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
     monkeypatch.setattr(discovery, "alive_latency", fake_alive)
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(chain_runner, "available", lambda: False)
     monkeypatch.setattr(port_scanner, "open_ports", fake_open_ports)
     monkeypatch.setattr(http_probe, "probe_service", fake_probe)
 

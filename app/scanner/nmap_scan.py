@@ -128,7 +128,7 @@ async def _run(argv: List[str], timeout: float) -> Optional[str]:
         return None
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, asyncio.CancelledError):
         try:
             proc.kill()
         except ProcessLookupError:

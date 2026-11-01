@@ -112,3 +112,28 @@ def test_app_lifespan_starts_and_stops_scheduler():
         assert client.get("/healthz").status_code == 200
         assert scheduler._task is not None and not scheduler._task.done()
     assert scheduler._task is None
+
+
+async def test_cancel_immediately_stops_in_flight_scan(monkeypatch, tmp_path):
+    from app.config import Settings
+    from app.models import ScanRequest
+    from app.store import JobStore
+
+    s = Settings()
+    s.data_dir = str(tmp_path)
+    store = JobStore(s)
+
+    async def slow_run(job, cancel):
+        job.state = JobState.running
+        await asyncio.sleep(60)
+
+    from app.models import JobState
+    monkeypatch.setattr(store.engine, "run", slow_run)
+
+    job = await store.create(ScanRequest(targets=["10.0.0.1"]))
+    await asyncio.sleep(0.02)
+    assert job.state == JobState.running
+
+    ok = await store.cancel(job.id)
+    assert ok is True
+    assert store.get(job.id).state == JobState.cancelled

@@ -26,16 +26,35 @@ class ScanEngine:
     async def run(self, job: ScanJob, cancel: asyncio.Event) -> None:
         job.state = JobState.running
         job.started_at = _now()
+        coro = self._run_demo(job, cancel) if job.request.demo_scenario else self._run(job, cancel)
+        run_task = asyncio.create_task(coro)
+        cancel_task = asyncio.create_task(cancel.wait())
         try:
-            if job.request.demo_scenario:
-                await self._run_demo(job, cancel)
+            done, _ = await asyncio.wait(
+                {run_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel.is_set() or cancel_task in done:
+                if not run_task.done():
+                    run_task.cancel()
+                    try:
+                        await run_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                job.state = JobState.cancelled
             else:
-                await self._run(job, cancel)
-            job.state = JobState.cancelled if cancel.is_set() else JobState.completed
+                await run_task
+                job.state = JobState.cancelled if cancel.is_set() else JobState.completed
+        except asyncio.CancelledError:
+            if not run_task.done():
+                run_task.cancel()
+            job.state = JobState.cancelled
         except Exception as exc:  # noqa: BLE001
             job.state = JobState.failed
             job.error = f"{type(exc).__name__}: {exc}"
         finally:
+            if not cancel_task.done():
+                cancel_task.cancel()
             job.finished_at = _now()
             if job.started_at:
                 job.duration_s = round(
@@ -227,7 +246,11 @@ class ScanEngine:
                     findings: List[Finding] = list(chain_map.get(ip, []))
                     seen_rules: set[str] = {f.rule_id for f in findings}
                     web_open: List[int] = []
-                    php_version = server = cms = runtime = None
+                    tmeta = chain_runner.get_target_meta(ip) if hasattr(chain_runner, "get_target_meta") else {}
+                    php_version = tmeta.get("php_version")
+                    server = tmeta.get("server")
+                    cms = tmeta.get("cms")
+                    runtime = f"PHP {php_version}" if php_version else None
                     merged_headers: Dict[str, str] = {}
                     probe_ports = [p for p in open_all if p not in ports.NON_WEB_PORTS]
                     for port in probe_ports:
@@ -295,7 +318,7 @@ class ScanEngine:
                 service = ("HTTPS" if has_tls else "HTTP") if has_web else "ไม่มีบริการเว็บ"
                 devices.append(Device(
                     ip=ip, hostname=hostname, matched_suffix=matched_suffix, up=True,
-                    mac=arp.get(ip),
+                    mac=arp.get(ip) or tmeta.get("mac"),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
                     service=service, php_version=php_version, server=server, cms=cms, runtime=runtime,
                     open_ports=sorted(web_open), services=services, latency_ms=latency,

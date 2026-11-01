@@ -680,7 +680,7 @@ function renderPortsPanel() {
 function renderAdvPanel() {
   const deepOff = !cfg.nmap_available && !cfg.deep_available;
   $("#p-adv").innerHTML = `<div class="stag">
-    <div class="ptitle">วิธีสแกน ${tip("เร็ว = เชื่อมต่อ TCP ร่วมกับชุดตรวจช่องโหว่ CybersRMUTL ทันทีโดยไม่ต้องรอ nmap · ลึก = ใช้ nmap อ่านชนิด/เวอร์ชันบริการ และ traceroute วาดเส้นทางเครือข่าย")}</div>
+    <div class="ptitle">วิธีสแกน ${tip("โหมดรวดเร็ว = ตรวจพอร์ตและช่องโหว่ได้อย่างรวดเร็ว · โหมดเชิงลึก = ตรวจรายละเอียดเวอร์ชันบริการและสำรวจเส้นทางเครือข่ายเพิ่มเติม")}</div>
     <div role="group" aria-label="วิธีสแกน" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">โหมดรวดเร็ว</span><span class="od">ตรวจพอร์ตและช่องโหว่มาตรฐาน</span></span></button>
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
@@ -835,45 +835,65 @@ async function viewScanning([id], alive) {
     <p class="in3 muted" style="margin-top:14px;font-size:13px">ปิดหน้านี้ได้ ระบบสแกนต่อเบื้องหลังและเก็บผลไว้ที่หน้าประวัติ</p>
   </div>`);
   const Pt = (i, j) => [200 + (i - j) * 8.2, 104 + (i + j) * 4.1];
-  $("#sc-plate").setAttribute("d", "M" + [Pt(-0.9, -0.9), Pt(15.9, -0.9), Pt(15.9, 15.9), Pt(-0.9, 15.9)].map((q) => q[0].toFixed(1) + " " + q[1].toFixed(1)).join("L") + "Z");
+  const plateEl = $("#sc-plate");
+  if (plateEl) plateEl.setAttribute("d", "M" + [Pt(-0.9, -0.9), Pt(15.9, -0.9), Pt(15.9, 15.9), Pt(-0.9, 15.9)].map((q) => q[0].toFixed(1) + " " + q[1].toFixed(1)).join("L") + "Z");
   const dot = (x, y, r) => `M${(x - r).toFixed(1)} ${y.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
-  $("#cancel").addEventListener("click", async (e) => {
+  const cancelBtn = $("#cancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", async (e) => {
     const b = e.currentTarget; b.disabled = true;
-    try { await api(`/api/scans/${id}/cancel`, { method: "POST" }); stopping = true; $("#sc-phase").textContent = "กำลังหยุด…"; lastPhase = "กำลังหยุด…"; }
-    catch (err) { toast(err.message); b.disabled = false; }
+    stopping = true;
+    const ph = $("#sc-phase"); if (ph) ph.textContent = "กำลังหยุดการสแกน…"; lastPhase = "กำลังหยุดการสแกน…";
+    try {
+      await api(`/api/scans/${id}/cancel`, { method: "POST" });
+      stop = true;
+      toast("หยุดการสแกนแล้ว");
+      location.replace(`#/results/${id}`);
+    } catch (err) {
+      stopping = false;
+      toast(err.message);
+      b.disabled = false;
+    }
   });
-  // the plate shows the probed fraction only; mid-scan the API does not say which addresses answered
   let lastSteps = "", lastPhase = "", stopping = false;
   const paint = (s) => {
-    if (!$("#sc-todo") || !$("#sc-done") || !$("#sc-ring") || !$("#sc-pct")) return;
-    const p = s.progress || {}, total = Math.max(1, p.total_ips || 1), inspect = ["inspect", "cybers_rmutl", "traceroute"].includes(p.phase);
-    const frac1 = Math.min(1, p.probed / total), frac2 = inspect ? (p.to_inspect ? p.inspected / p.to_inspect : 1) : 0;
+    const todoEl = $("#sc-todo"), doneEl = $("#sc-done"), headEl = $("#sc-head"), ringEl = $("#sc-ring"), pctEl = $("#sc-pct");
+    if (!todoEl || !doneEl || !ringEl || !pctEl) return;
+    const p = s.progress || {}, total = Math.max(1, p.total_ips || 1);
+    const inspect = ["inspect", "cybers_rmutl", "traceroute"].includes(p.phase);
+    const frac1 = Math.min(1, (p.probed || 0) / total), frac2 = inspect ? (p.to_inspect ? (p.inspected || 0) / p.to_inspect : 1) : 0;
     const pct = inspect ? 55 + Math.round(frac2 * 43) : Math.round(frac1 * 55);
     const stage = !p.phase ? 0 : inspect ? 2 : 1;
     const fills = [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
-    $$("[id^=seg]").forEach((b, i) => b.style.setProperty("--f", `${Math.round(fills[i] * 100)}%`));
+    $$("[id^=seg]").forEach((b, i) => b.style.setProperty("--f", `${Math.round((fills[i] || 0) * 100)}%`));
     const steps = STEPS.map(([t, h], i) => {
       const st = i < stage ? "done" : i === stage ? "on" : "wait";
       return `<li style="display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:center;padding:8px 10px;border-radius:12px;background:${st === "on" ? "var(--soft)" : "transparent"}">
         <span style="width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:${st === "wait" ? "var(--muted)" : "#fff"};background:${st === "wait" ? "#F0F2F8" : "var(--grad)"}">${st === "done" ? "✓" : i + 1}</span>
         <span style="min-width:0"><span class="ot">${t}</span><span class="od">${h}</span></span><span class="badge ${st === "done" ? "b-ok" : st === "on" ? "b-blue" : "b-grey"}">${st === "done" ? "เสร็จ" : st === "on" ? "กำลังทำ" : "รอคิว"}</span></li>`;
     }).join("");
-    // rewrite only on change, or the open panel would replay its entrance every poll
-    if (steps !== lastSteps) { $("#steps-list").innerHTML = steps; lastSteps = steps; }
+    const stepsListEl = $("#steps-list");
+    if (steps !== lastSteps && stepsListEl) { stepsListEl.innerHTML = steps; lastSteps = steps; }
     const shown = Math.round(frac1 * 256);
     let todo = "", done = "";
     for (let n = 0; n < 256; n += 1) { const [x, y] = Pt(Math.floor(n / 16), n % 16); if (n < shown) done += dot(x, y, 1.7); else todo += dot(x, y, 1.1); }
-    $("#sc-todo").setAttribute("d", todo || "M0 0"); $("#sc-done").setAttribute("d", done || "M0 0");
+    todoEl.setAttribute("d", todo || "M0 0"); doneEl.setAttribute("d", done || "M0 0");
     const h = Math.min(255, shown), [hx, hy] = Pt(Math.floor(h / 16), h % 16);
-    $("#sc-head").setAttribute("cx", hx.toFixed(1)); $("#sc-head").setAttribute("cy", hy.toFixed(1));
-    $("#sc-head").style.opacity = frac1 >= 1 ? 0 : 1;
-    $("#sc-ring").style.strokeDasharray = `${pct} 100`;
-    $("#sc-pct").textContent = `${pct}%`;
-    const phase = stopping ? "กำลังหยุด…" : `${inspect ? `ขั้นที่ 3 จาก 3 · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก 3 · ${STEPS[stage][0]}`} ${tip("ชี้ที่แถบความคืบหน้าเพื่อดูว่าแต่ละขั้นทำอะไร")}`;
-    if (phase !== lastPhase) { $("#sc-phase").innerHTML = phase; lastPhase = phase; }
-    $("#c-probed").textContent = num(p.probed); $("#c-total").textContent = num(p.total_ips);
-    $("#c-online").textContent = num(p.online); $("#c-risks").textContent = num(p.risks);
-    if ((s.intercepted_ports || []).length && !$("#sc-note").innerHTML) $("#sc-note").innerHTML = `<p class="notice b-blue" style="margin-top:14px;text-align:left">${ic("shield", 20)}<span>พบอุปกรณ์กลางทางตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(s.intercepted_ports.join(", "))}</span> — ระบบจะตัดเครื่องที่ไม่มีอยู่จริงออกให้</span></p>`;
+    if (headEl) {
+      headEl.setAttribute("cx", hx.toFixed(1)); headEl.setAttribute("cy", hy.toFixed(1));
+      headEl.style.opacity = frac1 >= 1 ? 0 : 1;
+    }
+    ringEl.style.strokeDasharray = `${pct} 100`;
+    pctEl.textContent = `${pct}%`;
+    const stepLabel = (STEPS[stage] || STEPS[0])[0];
+    const phase = stopping ? "กำลังหยุด…" : `${inspect ? `ขั้นที่ 3 จาก 3 · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก 3 · ${stepLabel}`} ${tip("ชี้ที่แถบความคืบหน้าเพื่อดูว่าแต่ละขั้นทำอะไร")}`;
+    const phaseEl = $("#sc-phase");
+    if (phase !== lastPhase && phaseEl) { phaseEl.innerHTML = phase; lastPhase = phase; }
+    const cp = $("#c-probed"), ct = $("#c-total"), co = $("#c-online"), cr = $("#c-risks"), cn = $("#sc-note");
+    if (cp) cp.textContent = num(p.probed);
+    if (ct) ct.textContent = num(p.total_ips);
+    if (co) co.textContent = num(p.online);
+    if (cr) cr.textContent = num(p.risks);
+    if ((s.intercepted_ports || []).length && cn && !cn.innerHTML) cn.innerHTML = `<p class="notice b-blue" style="margin-top:14px;text-align:left">${ic("shield", 20)}<span>พบอุปกรณ์กลางทางตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(s.intercepted_ports.join(", "))}</span> — ระบบจะตัดเครื่องที่ไม่มีอยู่จริงออกให้</span></p>`;
   };
   paint(s);
   let stop = false;
@@ -884,7 +904,9 @@ async function viewScanning([id], alive) {
     try { s = await api(`/api/scans/${id}/summary`); } catch { continue; }
     if (stop || !alive()) return;
     if (!["queued", "running"].includes(s.state)) {
-      $("#sc-pct").textContent = "100%"; $("#sc-ring").style.strokeDasharray = "100 100";
+      const pctDone = $("#sc-pct"), ringDone = $("#sc-ring");
+      if (pctDone) pctDone.textContent = "100%";
+      if (ringDone) ringDone.style.strokeDasharray = "100 100";
       setTimeout(() => { if (alive()) location.replace(`#/results/${id}`); }, 650);
       return;
     }

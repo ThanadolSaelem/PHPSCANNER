@@ -1,13 +1,16 @@
-"""Runner for CybersRMUTL/security-audit-toolkit (v6.3.0) integrated into Deep Mode.
+"""Runner for CybersRMUTL/security-audit-toolkit integrated into Fast Mode.
 
-Execution order in Deep Mode:
-  1. CybersRMUTL security-audit-toolkit (--pipeline / module scan)
-  2. nmap (-sT -sV service & version detection)
-  3. traceroute (network path mapping)
+Supports:
+1. Direct Python module invocation (`security_audit_toolkit.scan_single_target`) extracting all 16 CVE dictionary buckets:
+   nginx_cves, php_cves, cve_115560, nodejs_cves, gitlab_cves, app_cves, device_cves,
+   component_cves, exposure_cves, framework_cves, header_cves, tls_cves, online_cves,
+   oskernel_cves, win_php_cves, container_cves + lfi_findings + preconditions.
+2. CLI fallback (`security-audit --pipeline ...`).
 """
 from __future__ import annotations
 
 import asyncio
+import importlib
 import importlib.util
 import json
 import re
@@ -24,7 +27,32 @@ _RISK_STATUSES = {
     "vulnerable", "high-risk", "likely-vulnerable", "unpatched",
     "medium-risk", "vulnerable-version", "vulnerable-conditions", "open", "risk",
 }
-_SAFE_STATUSES = {"patched", "not-exploitable", "n/a", "mitigated", "safe", "ok"}
+_SAFE_STATUSES = {"patched", "not-exploitable", "n/a", "mitigated", "safe", "ok", "unknown"}
+
+_LAST_META: Dict[str, Dict[str, Any]] = {}
+
+
+def get_target_meta(ip_or_host: str) -> Dict[str, Any]:
+    return _LAST_META.get(ip_or_host, {})
+
+
+_TOOLKIT_DICT_KEYS = (
+    "nginx_cves",
+    "php_cves",
+    "nodejs_cves",
+    "gitlab_cves",
+    "app_cves",
+    "device_cves",
+    "component_cves",
+    "exposure_cves",
+    "framework_cves",
+    "header_cves",
+    "tls_cves",
+    "online_cves",
+    "oskernel_cves",
+    "win_php_cves",
+    "container_cves",
+)
 
 
 def _cli_path() -> Optional[str]:
@@ -47,7 +75,7 @@ def _map_severity(status: str, cvss: Optional[float], raw_sev: str = "") -> Seve
     s = raw_sev.strip().lower()
     if s in ("critical", "วิกฤต"):
         return Severity.critical
-    if s in ("high", "สูง"):
+    if s.startswith(("high", "medium-high")) or s == "สูง":
         return Severity.high
     if s in ("medium", "low", "ปานกลาง", "ต่ำ"):
         return Severity.low
@@ -66,21 +94,68 @@ def _map_severity(status: str, cvss: Optional[float], raw_sev: str = "") -> Seve
     return Severity.low
 
 
-def parse_toolkit_findings(raw_items: Any) -> List[Finding]:
-    """Convert raw JSON items from security-audit-toolkit into thscan Finding objects."""
-    if isinstance(raw_items, dict):
-        for k in ("findings", "vulnerabilities", "results", "items"):
-            if isinstance(raw_items.get(k), list):
-                raw_items = raw_items[k]
-                break
-    if not isinstance(raw_items, list):
-        return []
+def _flatten_toolkit_result(raw: Any) -> List[Dict[str, Any]]:
+    """Extract all finding dicts from a `scan_single_target` return dict or a list of dicts."""
+    items: List[Dict[str, Any]] = []
+    if isinstance(raw, list):
+        for el in raw:
+            items.extend(_flatten_toolkit_result(el))
+        return items
+    if not isinstance(raw, dict):
+        return items
 
+    # 1. Check the 15 category dicts from scan_single_target
+    found_buckets = False
+    for k in _TOOLKIT_DICT_KEYS:
+        bucket = raw.get(k)
+        if isinstance(bucket, dict):
+            found_buckets = True
+            for v in bucket.values():
+                if isinstance(v, dict):
+                    items.append(v)
+        elif isinstance(bucket, list):
+            found_buckets = True
+            items.extend(x for x in bucket if isinstance(x, dict))
+
+    # 2. Check cve_115560 single dict
+    c115 = raw.get("cve_115560")
+    if isinstance(c115, dict):
+        found_buckets = True
+        items.append(c115)
+
+    # 3. Check lfi_findings list
+    lfi_list = raw.get("lfi_findings")
+    if isinstance(lfi_list, list):
+        found_buckets = True
+        for lfi in lfi_list:
+            if isinstance(lfi, dict):
+                items.append({
+                    "cve": "LFI-CANDIDATE",
+                    "name": f"พบจุดเสี่ยง Local File Inclusion (LFI) ที่ {lfi.get('path', '')}?{lfi.get('param', '')}",
+                    "severity": "Critical" if lfi.get("confidence") == "high" else "High",
+                    "status": "vulnerable",
+                    "reason": f"หลักฐาน: {lfi.get('best_evidence', '')} ({lfi.get('url', '')})",
+                    "host_check": "ตรวจสอบและกรองพารามิเตอร์ที่นำไปเปิดไฟล์ใน include/require/file_get_contents",
+                })
+
+    if found_buckets:
+        return items
+
+    # 4. Generic fallback for {"findings": [...]} or single finding dict
+    for k in ("findings", "vulnerabilities", "results", "items"):
+        if isinstance(raw.get(k), list):
+            return [x for x in raw[k] if isinstance(x, dict)]
+    if "cve" in raw or "title" in raw or "status" in raw:
+        return [raw]
+    return items
+
+
+def parse_toolkit_findings(raw_items: Any) -> List[Finding]:
+    """Convert raw output from security-audit-toolkit into thscan Finding objects."""
+    flat = _flatten_toolkit_result(raw_items)
     out: List[Finding] = []
     seen: set[str] = set()
-    for idx, item in enumerate(raw_items):
-        if not isinstance(item, dict):
-            continue
+    for idx, item in enumerate(flat):
         raw_status = str(item.get("status") or item.get("result") or item.get("state") or "").strip().lower()
         if raw_status in _SAFE_STATUSES:
             continue
@@ -91,30 +166,63 @@ def parse_toolkit_findings(raw_items: Any) -> List[Finding]:
             cvss = None
 
         cve_raw = item.get("cve") or item.get("id") or ""
-        cves = [c.strip() for c in (cve_raw if isinstance(cve_raw, list) else str(cve_raw).split(",")) if c.strip().startswith("CVE-")]
-        title = str(item.get("title") or item.get("name") or (cves[0] if cves else f"CybersRMUTL Finding #{idx + 1}")).strip()
-        desc = str(item.get("details") or item.get("description") or item.get("summary") or "ตรวจพบจาก CybersRMUTL Security Audit Toolkit").strip()
-        evidence = str(item.get("evidence") or item.get("component") or item.get("url") or item.get("target") or "").strip()
-        rec = str(item.get("recommendation") or item.get("remediation") or "ตรวจสอบและอัปเดตแพตช์ตามคำแนะนำของ CybersRMUTL / ThaiCERT").strip()
+        cves = [
+            c.strip()
+            for c in (cve_raw if isinstance(cve_raw, list) else str(cve_raw).split(","))
+            if c.strip().startswith("CVE-")
+        ]
+        name_str = str(item.get("title") or item.get("name") or (cves[0] if cves else f"Finding #{idx + 1}")).strip()
+        desc = str(item.get("reason") or item.get("details") or item.get("description") or item.get("summary") or name_str).strip()
+        evidence = str(item.get("trigger") or item.get("evidence") or item.get("component") or item.get("url") or "").strip()
+        rec = str(item.get("host_check") or item.get("recommendation") or item.get("mitigation") or "ตรวจสอบและอัปเดตแพตช์ตามคำแนะนำ").strip()
         sev = _map_severity(raw_status or "vulnerable", cvss, str(item.get("severity") or ""))
         if sev == Severity.safe:
             continue
-        rule_id = f"cybers_rmutl_{(cves[0] if cves else title).lower().replace(' ', '_')[:32]}"
+        slug = (str(cve_raw) or name_str).lower().replace(" ", "_")[:40]
+        rule_id = f"cybers_rmutl_{slug}"
         if rule_id in seen:
             continue
         seen.add(rule_id)
-        out.append(Finding(
-            rule_id=rule_id,
-            title=f"[CybersRMUTL] {title}",
-            severity=sev,
-            confidence=Confidence.high,
-            description=desc[:1200],
-            evidence=evidence[:600],
-            recommendation=rec[:600],
-            cve=cves,
-            cvss=cvss,
-        ))
+        conf = Confidence.confirmed if raw_status in ("vulnerable", "high-risk") else Confidence.high
+        out.append(
+            Finding(
+                rule_id=rule_id,
+                title=name_str,
+                severity=sev,
+                confidence=conf,
+                description=desc[:1200],
+                evidence=evidence[:600],
+                recommendation=rec[:600],
+                cve=cves,
+                cvss=cvss,
+            )
+        )
     return out
+
+
+def _run_module_target_sync(target: str, timeout: float) -> Optional[Dict[str, Any]]:
+    """Directly invoke `security_audit_toolkit.scan_single_target` in Python if available."""
+    try:
+        sat = importlib.import_module("security_audit_toolkit")
+        if not hasattr(sat, "scan_single_target"):
+            return None
+        opts = {
+            "timeout": min(timeout, 6.0),
+            "depth": 1,
+            "max_pages": 10,
+            "crawl_budget": 10,
+            "rate": 0,
+            "lfi_threads": 4,
+            "skip_lfi": False,
+            "no_verify_ssl": True,
+            "verbose": False,
+            "scan_mode": "auto",
+            "mptcp_probe": True,
+            "online_cve": True,
+        }
+        return sat.scan_single_target(target, opts, idx=1, total=1)
+    except Exception:
+        return None
 
 
 def _run_sync(argv: List[str], timeout: float) -> Optional[str]:
@@ -145,7 +253,7 @@ async def _exec(argv: List[str], timeout: float) -> Optional[str]:
         return None
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, asyncio.CancelledError):
         try:
             proc.kill()
         except ProcessLookupError:
@@ -159,13 +267,44 @@ async def run_target_audit(
     settings: Settings,
     cancel: Optional[asyncio.Event] = None,
 ) -> Dict[str, Any]:
-    """Run CybersRMUTL security-audit-toolkit against a target IP, CIDR, or URL."""
+    """Run CybersRMUTL security-audit-toolkit against a target IP or hostname."""
     if cancel and cancel.is_set():
         return {"ran": False, "findings": [], "summary": "cancelled"}
     if not available():
         return {"ran": False, "findings": [], "summary": "security-audit-toolkit not installed"}
 
-    timeout = float(getattr(settings, "rce_chain_timeout_s", 90))
+    timeout = float(getattr(settings, "rce_chain_timeout_s", 45))
+
+    # 1. Prefer direct Python module call (`scan_single_target`) so all 16 CVE buckets are captured losslessly
+    if _module_available():
+        raw_dict = await asyncio.to_thread(_run_module_target_sync, target, timeout)
+        if isinstance(raw_dict, dict):
+            fp = raw_dict.get("fingerprint") or {}
+            cms_info = raw_dict.get("cms") or {}
+            php_vers = fp.get("php_versions") or []
+            srv_fam = fp.get("server_family") or ""
+            srv_ver = fp.get("server_version") or ""
+            srv_str = f"{srv_fam}/{srv_ver}".strip("/") if srv_fam and srv_fam != "unknown" else None
+            meta = {
+                "php_version": sorted(php_vers)[0] if php_vers else None,
+                "cms": cms_info.get("cms") if isinstance(cms_info, dict) else None,
+                "server": srv_str,
+                "mac": fp.get("mac"),
+                "os": fp.get("os"),
+                "waf": fp.get("waf"),
+                "stack_layers": fp.get("stack_layers") or [],
+            }
+            _LAST_META[target] = meta
+            findings = parse_toolkit_findings(raw_dict)
+            return {
+                "ran": True,
+                "target": target,
+                "findings": findings,
+                "vulnerability_count": len(findings),
+                "summary": f"ตรวจพบความเสี่ยง {len(findings)} รายการ",
+            }
+
+    # 2. Fallback to CLI execution
     cli = _cli_path()
     with tempfile.TemporaryDirectory(prefix="thscan_rmutl_") as tmp_dir:
         root = Path(tmp_dir)
@@ -181,56 +320,27 @@ async def run_target_audit(
             "--evidence-dir", str(ev_dir),
         ]
         raw_out = await _exec(argv, timeout=timeout)
-
         parsed_items: List[Any] = []
-        # 1. Check any JSON files written into output_dir or evidence_dir
         for jf in sorted(root.rglob("*.json")):
             try:
                 data = json.loads(jf.read_text(encoding="utf-8", errors="replace"))
-                if isinstance(data, list):
-                    parsed_items.extend(data)
-                elif isinstance(data, dict):
-                    for k in ("findings", "vulnerabilities", "results", "items"):
-                        if isinstance(data.get(k), list):
-                            parsed_items.extend(data[k])
+                parsed_items.append(data)
             except (OSError, json.JSONDecodeError):
                 continue
-
-        # 2. Also parse JSON blocks or CVE lines from stdout if present
         if raw_out and not parsed_items:
             m = re.search(r"(\[.*\]|\{.*\})", raw_out, re.DOTALL)
             if m:
                 try:
-                    data = json.loads(m.group(1))
-                    if isinstance(data, list):
-                        parsed_items.extend(data)
-                    elif isinstance(data, dict):
-                        parsed_items.append(data)
+                    parsed_items.append(json.loads(m.group(1)))
                 except json.JSONDecodeError:
                     pass
-            # Extract CVE mentions from text output if CLI printed human-readable report
-            if not parsed_items:
-                for line in raw_out.splitlines():
-                    if any(w in line.upper() for w in ("VULNERABLE", "HIGH-RISK", "UNPATCHED")):
-                        cves = re.findall(r"CVE-\d{4}-\d{4,7}", line.upper())
-                        parsed_items.append({
-                            "cve": ",".join(cves),
-                            "title": cves[0] if cves else "ช่องโหว่จากการตรวจเชิงลึก CybersRMUTL",
-                            "status": "vulnerable",
-                            "details": line.strip(),
-                            "target": target,
-                        })
-
         findings = parse_toolkit_findings(parsed_items)
         return {
             "ran": True,
             "target": target,
             "findings": findings,
             "vulnerability_count": len(findings),
-            "summary": (
-                f"CybersRMUTL ตรวจพบความเสี่ยง {len(findings)} รายการ"
-                if findings else "CybersRMUTL ตรวจสอบเสร็จสิ้น ไม่พบช่องโหว่เพิ่มเติม"
-            ),
+            "summary": f"ตรวจพบความเสี่ยง {len(findings)} รายการ",
         }
 
 
@@ -240,12 +350,10 @@ async def run_for_targets(
     settings: Settings,
     cancel: Optional[asyncio.Event] = None,
 ) -> Dict[str, List[Finding]]:
-    """Run CybersRMUTL toolkit across scan targets FIRST before nmap & traceroute.
-    Returns {ip_or_target: [Finding, ...]}."""
+    """Run CybersRMUTL toolkit across scan targets in Fast Mode."""
     if not available() or not targets:
         return {}
     out: Dict[str, List[Finding]] = {}
-    # Limit to first 16 targets per batch so large /24 scans stay responsive
     batch = targets[:16]
     sem = asyncio.Semaphore(4)
 
@@ -255,6 +363,8 @@ async def run_for_targets(
         target_arg = site_hosts.get(t, t)
         async with sem:
             res = await run_target_audit(target_arg, settings, cancel)
+        if target_arg in _LAST_META:
+            _LAST_META[t] = _LAST_META[target_arg]
         if res.get("findings"):
             out[t] = res["findings"]
 

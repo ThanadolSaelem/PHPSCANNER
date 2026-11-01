@@ -83,7 +83,6 @@ class JobStore:
             created_at=datetime.now(timezone.utc),
             request=request,
             demo_scenario=request.demo_scenario,
-            scan_mode=request.scan_mode,
         )
         cancel = asyncio.Event()
         async with self._lock:
@@ -100,7 +99,13 @@ class JobStore:
         return job
 
     async def _run(self, job: ScanJob, cancel: asyncio.Event) -> None:
-        await self.engine.run(job, cancel)
+        try:
+            await self.engine.run(job, cancel)
+        except asyncio.CancelledError:
+            job.state = JobState.cancelled
+            job.finished_at = datetime.now(timezone.utc)
+            if job.started_at:
+                job.duration_s = round((job.finished_at - job.started_at).total_seconds(), 2)
         summ = job.summary()
         self.audit.record(
             "scan_finished",
@@ -125,11 +130,21 @@ class JobStore:
         ]
 
     async def cancel(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
         cancel = self._cancels.get(job_id)
-        if cancel is None:
+        if job is None and cancel is None:
             return False
-        cancel.set()
+        if cancel is not None:
+            cancel.set()
+        if job is not None and job.state in (JobState.queued, JobState.running):
+            job.state = JobState.cancelled
+            job.finished_at = datetime.now(timezone.utc)
+            if job.started_at:
+                job.duration_s = round((job.finished_at - job.started_at).total_seconds(), 2)
+
         self.audit.record("scan_cancelled", job_id=job_id)
+        if job is not None:
+            self._export(job)
         return True
 
     async def clear_history(self) -> int:

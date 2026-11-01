@@ -32,6 +32,7 @@ class Site:
     port: Optional[int] = None    # explicit port from the link, if any
     ips: List[str] = field(default_factory=list)
     suffix: Optional[str] = None  # matched government suffix
+    wildcard: bool = False
 
 
 def looks_like_site(spec: str) -> bool:
@@ -53,6 +54,10 @@ def parse(text: str) -> Site:
     if parts.scheme.lower() not in ("http", "https"):
         raise SiteError(f"รองรับเฉพาะลิงก์ http:// หรือ https:// ({raw})")
     host = (parts.hostname or "").rstrip(".")
+    wildcard = False
+    if host.startswith("*."):
+        wildcard = True
+        host = host[2:]
     if not host:
         raise SiteError(f"ไม่พบชื่อโดเมนในลิงก์: {raw}")
     try:
@@ -71,25 +76,62 @@ def parse(text: str) -> Site:
         raise SiteError(f"ชื่อโดเมนไม่ถูกต้อง: {host}")
     if port is None and parts.scheme.lower() == "https":
         port = 443
-    return Site(text=raw, host=host, port=port)
+    return Site(text=raw, host=host, port=port, wildcard=wildcard)
+
+
+
+def _discover_subdomains_sync(domain: str, max_subs: int = 12) -> List[str]:
+    """Discover subdomains using security_audit_toolkit CT/OSINT fetchers when *.domain is used."""
+    subs: set[str] = {domain, f"www.{domain}"}
+    try:
+        import importlib
+        sat = importlib.import_module("security_audit_toolkit")
+        for fn_name in ("_fetch_hackertarget", "_fetch_anubis", "_fetch_rapiddns"):
+            fn = getattr(sat, fn_name, None)
+            if callable(fn):
+                res = fn(domain, timeout=4)
+                if isinstance(res, set):
+                    subs |= res
+        crt_fn = getattr(sat, "_fetch_crtsh", None)
+        if callable(crt_fn):
+            crt_res, _ = crt_fn(domain, timeout=6)
+            if isinstance(crt_res, set):
+                subs |= crt_res
+    except Exception:
+        pass
+    cleaned = [s for s in sorted(subs) if s.endswith(domain) and "*" not in s]
+    return cleaned[:max_subs]
 
 
 async def resolve(site: Site, timeout: float = 4.0) -> Site:
     """Look the name up with the operating system's resolver, like a browser
     would — so VPN / split-horizon DNS and hosts-file entries all work."""
     loop = asyncio.get_running_loop()
-    try:
-        infos = await asyncio.wait_for(
-            loop.getaddrinfo(site.host, None, family=socket.AF_INET, type=socket.SOCK_STREAM),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        raise SiteError(f"ค้นหา DNS ของ {site.host} ไม่สำเร็จ (หมดเวลา)")
-    except socket.gaierror as exc:
-        if exc.errno in (socket.EAI_NONAME, getattr(socket, "EAI_NODATA", -5)):
-            raise SiteError(f"ไม่พบโดเมน {site.host} ในระบบ DNS")
-        raise SiteError(f"ค้นหา DNS ของ {site.host} ไม่สำเร็จ ({exc.strerror})")
-    ips = {info[4][0] for info in infos}
+    hosts_to_resolve = [site.host]
+    if site.wildcard:
+        discovered = await asyncio.to_thread(_discover_subdomains_sync, site.host)
+        if discovered:
+            hosts_to_resolve = discovered
+    ips: set[str] = set()
+    last_exc: Optional[Exception] = None
+    for h in hosts_to_resolve:
+        try:
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(h, None, family=socket.AF_INET, type=socket.SOCK_STREAM),
+                timeout=timeout,
+            )
+            ips.update(info[4][0] for info in infos)
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if not ips and last_exc is not None:
+        if isinstance(last_exc, asyncio.TimeoutError):
+            raise SiteError(f"ค้นหา DNS ของ {site.host} ไม่สำเร็จ (หมดเวลา)")
+        if isinstance(last_exc, socket.gaierror):
+            if last_exc.errno in (socket.EAI_NONAME, getattr(socket, "EAI_NODATA", -5)):
+                raise SiteError(f"ไม่พบโดเมน {site.host} ในระบบ DNS")
+            raise SiteError(f"ค้นหา DNS ของ {site.host} ไม่สำเร็จ ({last_exc.strerror})")
+        raise SiteError(f"ค้นหา DNS ของ {site.host} ไม่สำเร็จ")
     if not ips:
         raise SiteError(f"โดเมน {site.host} ไม่มีที่อยู่ IPv4")
     site.ips = sorted(ips, key=lambda a: tuple(int(o) for o in a.split(".")))[:8]

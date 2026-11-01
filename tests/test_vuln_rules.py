@@ -126,3 +126,109 @@ def test_device_severity_and_assessment():
     # no web service -> safe LAN message
     assert "LAN" in vr.thaicert_assessment(Severity.safe, False, [])
     assert vr.device_severity([]) == Severity.safe
+
+
+def test_nginx_2026_and_historical_cves():
+    findings, _, _, _ = vr.evaluate(
+        scheme="https",
+        headers={"server": "nginx/1.30.2", "alt-svc": 'h3=":443"'},
+        body="<html>ok</html>",
+    )
+    cves = {c for f in findings for c in f.cve}
+    assert {
+        "CVE-2026-15176",
+        "CVE-2026-93479",
+        "CVE-2026-97205",
+        "CVE-2026-95101",
+        "CVE-2026-97629",
+    } <= cves
+
+
+def test_historical_php_cves():
+    findings, _, _, _ = vr.evaluate(
+        scheme="http",
+        headers={"x-powered-by": "PHP/8.1.10"},
+        body="",
+    )
+    cves = {c for f in findings for c in f.cve}
+    assert "CVE-2024-4577" in cves
+
+
+def test_nodejs_2026_cves_and_gitlab_cve():
+    findings_node, _, _, _ = vr.evaluate(
+        scheme="https",
+        headers={"x-powered-by": "Express", "server": "Node.js/20.11.0"},
+        body="",
+    )
+    node_cves = {c for f in findings_node for c in f.cve}
+    assert "CVE-2026-111497" in node_cves and "CVE-2026-105482" in node_cves
+
+    findings_gl, _, cms, _ = vr.evaluate(
+        scheme="https",
+        headers={"set-cookie": "_gitlab_session=abc"},
+        body='<html><script>window.gon={};gon.version="18.5.1";</script></html>',
+    )
+    assert cms == "GitLab"
+    assert any("CVE-2026-110264" in f.cve for f in findings_gl)
+
+
+def test_chain_runner_parses_all_16_toolkit_buckets():
+    from app.scanner import chain_runner
+
+    sample_scan_single_target = {
+        "target": "http://10.0.0.5",
+        "reachable": True,
+        "nginx_cves": {
+            "CVE-2026-15176": {
+                "cve": "CVE-2026-15176",
+                "name": "Heap Buffer Overflow (alias+rewrite)",
+                "severity": "Critical",
+                "status": "likely-vulnerable",
+                "reason": "NGINX 1.30.1 กระทบ + พบ alias/rewrite",
+                "host_check": "nginx -T | grep alias",
+            }
+        },
+        "cve_115560": {
+            "cve": "CVE-2026-115560",
+            "name": "Session Upload Progress Injection",
+            "severity": "Medium-High",
+            "status": "vulnerable-conditions",
+            "reason": "พบการใช้ PHP session + upload_progress reachable",
+            "mitigation": "session.upload_progress.enabled = 0",
+        },
+        "exposure_cves": {
+            "EXPOSURE-env": {
+                "cve": "EXPOSURE-env",
+                "name": "ไฟล์ .env เปิดเผย",
+                "severity": "Critical",
+                "status": "vulnerable",
+                "reason": "เข้าถึง /.env ได้ (HTTP 200)",
+            }
+        },
+        "framework_cves": {
+            "CVE-2021-3129": {
+                "cve": "CVE-2021-3129",
+                "name": "Laravel Ignition RCE",
+                "severity": "Critical",
+                "status": "vulnerable",
+                "reason": "เข้าถึง /_ignition/health-check ได้",
+            }
+        },
+        "lfi_findings": [
+            {
+                "path": "/view.php",
+                "param": "page",
+                "url": "http://10.0.0.5/view.php?page=FUZZ",
+                "best_evidence": "phpfilter leaked",
+                "confidence": "high",
+            }
+        ],
+    }
+    parsed = chain_runner.parse_toolkit_findings(sample_scan_single_target)
+    titles = " | ".join(f.title for f in parsed)
+    assert len(parsed) == 5
+    assert "Heap Buffer Overflow" in titles
+    assert "Session Upload Progress" in titles
+    assert ".env" in titles
+    assert "Laravel Ignition" in titles
+    assert "Local File Inclusion" in titles

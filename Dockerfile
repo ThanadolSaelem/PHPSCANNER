@@ -1,4 +1,4 @@
-# thscan — defensive PHP2Shell scanner for Thai government web assets.
+# thscan — defensive PHP2Shell & multi-CVE scanner.
 FROM python:3.13-slim AS base
 
 RUN apt-get update \
@@ -14,12 +14,9 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --prefer-binary --retries 10 --timeout 180 -r requirements.txt && \
-    (pip install --prefer-binary --retries 10 --timeout 180 \
-      "security-audit-toolkit[full] @ https://github.com/CybersRMUTL/security-audit-toolkit/archive/refs/tags/v6.3.0.zip" || \
-     pip install --no-deps --retries 10 --timeout 180 \
-      "https://github.com/CybersRMUTL/security-audit-toolkit/archive/refs/tags/v6.3.0.zip")
+    pip install --prefer-binary --retries 10 --timeout 180 -r requirements.txt
 
+COPY security_audit_toolkit.py ./security_audit_toolkit.py
 COPY app ./app
 COPY static ./static
 

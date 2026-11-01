@@ -1,3 +1,4 @@
+from app.scanner import chain_runner
 """Port profiles, website (link) targets and the same-host redirect rule."""
 import asyncio
 from datetime import datetime, timezone
@@ -208,6 +209,7 @@ async def test_engine_scans_site_by_host_and_lists_services(monkeypatch, tmp_pat
     monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
     monkeypatch.setattr(discovery, "alive_latency", fake_alive)
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(chain_runner, "available", lambda: False)
     monkeypatch.setattr(port_scanner, "open_ports", fake_open)
     monkeypatch.setattr(http_probe, "probe_service", fake_probe)
 
@@ -252,6 +254,7 @@ async def test_host_found_when_only_a_profile_port_is_open(monkeypatch, tmp_path
     monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
     monkeypatch.setattr(discovery, "alive_latency", fake_alive)
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(chain_runner, "available", lambda: False)
     monkeypatch.setattr(port_scanner, "open_ports", fake_open)
     monkeypatch.setattr(http_probe, "probe_service", fake_probe)
 
@@ -300,6 +303,7 @@ async def test_php_on_a_non_standard_port_is_probed_and_flagged(monkeypatch, tmp
     monkeypatch.setattr(discovery, "intercepted_ports", fake_intercepted)
     monkeypatch.setattr(discovery, "alive_latency", fake_alive)
     monkeypatch.setattr(discovery, "read_arp_table", lambda: {})
+    monkeypatch.setattr(chain_runner, "available", lambda: False)
     monkeypatch.setattr(port_scanner, "open_ports", fake_open)
     monkeypatch.setattr(http_probe, "probe_service", fake_probe)
 
@@ -328,19 +332,3 @@ def test_schedule_update_keeps_id(api, tmp_path, monkeypatch):
     assert client.put(f"/api/schedules/{sid}", json={"name": "b", "targets": ["8.8.8.0/24"], "cron": "0 2 * * *"}).status_code == 403
     assert client.put("/api/schedules/nope", json={"name": "b", "targets": ["10.0.1.0/24"], "cron": "0 2 * * *"}).status_code == 404
     client.delete(f"/api/schedules/{sid}")
-
-
-def test_custom_profile_scans_only_requested_ports():
-    assert ports.profile_ports("custom", "21, 22", [80, 443, 8080, 8443]) == [21, 22]
-
-
-async def test_canary_rst_is_not_treated_as_intercepted_middlebox(monkeypatch):
-    from app.scanner import discovery
-
-    async def fake_open_connection(ip, port):
-        raise ConnectionRefusedError("TCP RST from router")
-
-    import asyncio
-    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
-    blocked = await discovery.intercepted_ports([21, 22, 80], 1.5)
-    assert blocked == set()

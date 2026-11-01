@@ -38,6 +38,7 @@ app = FastAPI(
     description="LAN & Enterprise device scanner with PHP2Shell / ThaiCERT compliance assessment",
     lifespan=lifespan,
 )
+app.router.lifespan_context = lifespan
 store = JobStore(settings)
 scheduler = Scheduler(store)
 
