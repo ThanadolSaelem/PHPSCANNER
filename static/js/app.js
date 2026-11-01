@@ -414,7 +414,7 @@ const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 
   site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", report: null, reportFor: "", detected: [] };
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
-  ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์ของหน่วยงาน", "globe"],
+  ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์หรือชื่อโดเมน", "globe"],
   ["text", "พิมพ์เอง", "หลายรายการคั่นด้วยจุลภาค", "lines"],
 ];
 const siteList = () => S.site.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean).slice(0, cfg.max_sites || 20);
@@ -433,7 +433,7 @@ function scanPlan() {
     plan.summary = `เว็บไซต์ · ${plan.big}`;
     const asIp = list.length === 1 && parseIpTarget(list[0]);
     if (!plan.valid) plan.reason = "วางลิงก์เว็บไซต์ก่อน";
-    else if (asIp) { plan.valid = false; plan.scoped = false; plan.reason = `นี่คือเลข IP — กดปุ่มด้านล่างเพื่อตรวจ ${asIp.ip} ในโหมดเครื่องเดียว`; plan.sub = "ไม่ใช่โดเมนหน่วยงาน"; }
+    else if (asIp) { plan.valid = false; plan.scoped = false; plan.reason = `นี่คือเลข IP — กดปุ่มด้านล่างเพื่อตรวจ ${asIp.ip} ในโหมดเครื่องเดียว`; plan.sub = "เป็นเลข IP ไม่ใช่ชื่อโดเมน"; }
     else if (!fresh) { plan.pending = true; plan.reason = "กำลังตรวจสอบลิงก์…"; plan.sub = "กำลังค้นหา IP จาก DNS…"; }
     else {
       const bad = S.report.filter((r) => r.problems.length);
@@ -656,8 +656,8 @@ function renderTargetPanel() {
   else if (S.mode === "range") input = `<div><span class="lbl">ช่วง IP (ในวงเดียวกัน)</span><div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
     ${S.oct.slice(0, 3).map((v, i) => `<input class="inp oct" inputmode="numeric" autocomplete="off" data-oct="oct" data-i="${i}" value="${esc(v)}" aria-label="ส่วนที่ ${i + 1}">`).join(SEP)}
     ${SEP}<input class="inp oct" id="rs" inputmode="numeric" autocomplete="off" value="${esc(S.rs)}" aria-label="เริ่มที่"><span style="font-size:13px;color:var(--muted)">ถึง</span><input class="inp oct" id="re" inputmode="numeric" autocomplete="off" value="${esc(S.re)}" aria-label="ถึง"></div></div>`;
-  else if (S.mode === "site") input = `<label style="display:block"><span class="lbl">ลิงก์หรือโดเมนของหน่วยงาน ${tip("วางลิงก์ เช่น https://www.agency.go.th ระบบค้นหา IP จาก DNS ให้ และส่งชื่อเว็บไปด้วยเพื่อให้ได้ผลของเว็บนั้นจริง · ใส่ได้หลายเว็บคั่นด้วยเว้นวรรค")}</span>
-    <input class="inp" id="site-in" value="${esc(S.site)}" placeholder="https://www.agency.go.th" autocomplete="off" spellcheck="false"></label><div id="site-preview" aria-live="polite" style="margin-top:8px"></div>`;
+  else if (S.mode === "site") input = `<label style="display:block"><span class="lbl">ลิงก์หรือชื่อโดเมนเว็บไซต์ ${tip("วางลิงก์หรือชื่อโดเมน เช่น https://example.com ระบบจะค้นหา IP จาก DNS ให้ และส่งชื่อโดเมนไปด้วยเพื่อให้ได้ผลของเว็บนั้นจริง · ใส่ได้หลายเว็บคั่นด้วยเว้นวรรคหรือจุลภาค")}</span>
+    <input class="inp" id="site-in" value="${esc(S.site)}" placeholder="https://example.com" autocomplete="off" spellcheck="false"></label><div id="site-preview" aria-live="polite" style="margin-top:8px"></div>`;
   else input = `<label style="display:block"><span class="lbl">ซับเน็ต ช่วง หรือ IP คั่นด้วยจุลภาค</span><input class="inp" id="text-in" value="${esc(S.text)}" placeholder="10.0.5.0/24, 10.0.6.10-50, 10.0.7.3" autocomplete="off" spellcheck="false"></label>`;
   const det = S.detected.length && S.mode !== "site" ? `<div style="margin-top:12px"><span class="lbl">ระบบหาให้แล้ว ${tip("วงเครือข่ายที่เครื่องนี้เชื่อมต่ออยู่ กดเพื่อใช้ได้ทันที")}</span>
     <div style="display:flex;flex-direction:column;gap:6px">${S.detected.map((d) => `<button type="button" class="opt" data-detected="${esc(d.cidr)}" ${d.ok ? "" : "disabled"} style="min-height:46px"><span style="flex:1;min-width:0"><span class="ot">${esc(d.cidr)}</span><span class="od">${esc(d.name)}</span></span><span class="badge ${d.ok ? "b-blue" : "b-grey"}">${d.ok ? `ใช้วงนี้ · ${num(d.hosts)}` : "นอกขอบเขต"}</span></button>`).join("")}</div></div>` : "";
@@ -720,13 +720,13 @@ function renderSitePreview() {
   const box = $("#site-preview");
   if (!box) return;
   const list = siteList(), key = list.join("\n");
-  if (!key) { box.innerHTML = `<p class="od">ตรวจได้เฉพาะโดเมนหน่วยงาน (${esc((cfg.gov_suffixes || []).join(", "))})</p>`; return; }
+  if (!key) { box.innerHTML = `<p class="od">${cfg.enforce_scope ? `ตรวจได้เฉพาะโดเมนที่อนุญาต (${esc((cfg.gov_suffixes || []).join(", "))})` : "ใส่ลิงก์หรือชื่อโดเมนได้ทุกเว็บไซต์ (ค้นหา IP จาก DNS อัตโนมัติ)"}</p>`; return; }
   // typed an IP (maybe with a port) into website mode? offer a one-click switch
   if (list.length === 1) {
     const t = parseIpTarget(list[0]);
     if (t) {
       box.innerHTML = `<div style="padding:10px 12px;border-radius:12px;background:var(--warn-bg)">
-        <div style="font-size:13px;color:var(--warn);font-weight:600">นี่คือเลข IP ไม่ใช่โดเมนหน่วยงาน — โหมดเว็บไซต์ใช้กับลิงก์ .go.th ฯลฯ</div>
+        <div style="font-size:13px;color:var(--warn);font-weight:600">นี่คือเลข IP ไม่ใช่ชื่อโดเมน — โหมดเว็บไซต์ใช้สำหรับลิงก์หรือชื่อโดเมน</div>
         <button type="button" class="btn btn-g" data-use-ip="${esc(t.ip)}" ${t.port ? `data-port="${t.port}"` : ""} style="margin-top:8px">
           ${ic("cube", 16)} ตรวจ ${esc(t.ip)} ในโหมดเครื่องเดียว${t.port ? ` · พอร์ต ${t.port}` : ""}</button></div>`;
       return;
