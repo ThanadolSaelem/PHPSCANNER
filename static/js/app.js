@@ -1101,21 +1101,6 @@ function cubeSvg(d) {
     <path d="${vis}" fill="none" stroke="url(#hgrad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="${slots || "M0 0"}" fill="none" stroke="${SEV[d.severity].dot}" stroke-width="3" stroke-linecap="round"/></svg>`;
 }
-function rceTargetPrefill(d, job) {
-  const request = job.request || {}, mapped = (request.site_hosts || {})[d.ip];
-  for (const raw of request.sites || []) {
-    try {
-      const candidate = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
-      if (!mapped || candidate.hostname.toLowerCase() === mapped.toLowerCase()) return candidate.href;
-    } catch { /* ignore malformed historical site input */ }
-  }
-  const open = (d.open_ports || []).map(Number);
-  const port = [443, 8443, 9443, 10443].find((p) => open.includes(p)) || open[0] || 80;
-  const scheme = [443, 8443, 9443, 10443].includes(port) ? "https" : "http";
-  const host = mapped || d.ip;
-  const defaultPort = scheme === "https" ? 443 : 80;
-  return `${scheme}://${host}${port === defaultPort ? "" : `:${port}`}/`;
-}
 function showRceVerifyResult(result) {
   const verdict = String(result.verdict || "UNKNOWN");
   const confirmed = ["RCE_CONFIRMED", "CANARY_CONFIRMED"].includes(verdict);
@@ -1147,12 +1132,10 @@ function rceTargetPrefillForScan(scanBody) {
   }
   return "";
 }
-function openRceVerifyForm(target, scanBody = null) {
-  const chained = !!scanBody;
-  const title = chained ? "ตั้งค่า fast scan + RCE Verify" : "ตั้งค่าการตรวจ RCE";
-  const submitLabel = chained ? "เริ่ม fast scan และต่อ RCE Verify" : "เริ่มตรวจ RCE";
-  const m = openModal(`<h2>${title}</h2>
-    ${chained ? `<p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>หลังส่งแบบฟอร์ม ระบบจะทำ fast scan หนึ่งรอบ แล้วเรียก RCE Verify ต่อกับ URL นี้อัตโนมัติ โดยไม่มี full scan รอบที่สอง การตรวจ RCE เป็น active และอาจส่ง proof payload ไปยังเป้าหมาย</span></p>` : ""}
+function openRceVerifyForm(target, scanBody) {
+  const submitLabel = "เริ่ม fast scan และต่อ RCE Verify";
+  const m = openModal(`<h2>ตั้งค่า fast scan + RCE Verify</h2>
+    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>หลังส่งแบบฟอร์ม ระบบจะทำ fast scan หนึ่งรอบ แล้วเรียก RCE Verify ต่อกับ URL นี้อัตโนมัติ โดยไม่มี full scan รอบที่สอง การตรวจ RCE เป็น active และอาจส่ง proof payload ไปยังเป้าหมาย</span></p>
     <p class="lead">Bearer token ใช้ยืนยันคำขอครั้งนี้เท่านั้นและไม่ถูกบันทึกใน browser หรือ scan job</p>
     <form id="rce-form" style="display:grid;gap:10px;margin-top:14px">
       <label><span class="lbl">Target URL</span><input class="inp" id="rce-target" type="url" required maxlength="2048" autocomplete="url" value="${esc(target)}"></label>
@@ -1175,7 +1158,7 @@ function openRceVerifyForm(target, scanBody = null) {
     e.preventDefault();
     if (!form.reportValidity()) return;
     const secret = token.value.trim(), btn = run;
-    btn.disabled = true; btn.textContent = chained ? "กำลังเริ่ม fast scan…" : "กำลังตรวจ…";
+    btn.disabled = true; btn.textContent = "กำลังเริ่ม fast scan…";
     const body = {
       target_url: $("#rce-target", m.el).value.trim(),
       lfi_url: $("#rce-lfi", m.el).value.trim() || null,
@@ -1186,46 +1169,23 @@ function openRceVerifyForm(target, scanBody = null) {
       confirm: true,
     };
     try {
-      if (chained) {
-        const job = await api("/api/scans", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${secret}` },
-          body: JSON.stringify({ ...scanBody, rce_verify: body }),
-        });
-        token.value = "";
-        m.close();
-        location.hash = `#/scan/${job.id}`;
-        return;
-      }
-      const result = await api("/api/rce-verify", {
-        method: "POST", headers: { Authorization: `Bearer ${secret}` }, body: JSON.stringify(body),
+      const job = await api("/api/scans", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ ...scanBody, rce_verify: body }),
       });
-      m.close(); showRceVerifyResult(result);
+      token.value = "";
+      m.close();
+      location.hash = `#/scan/${job.id}`;
     } catch (err) {
       token.value = ""; btn.textContent = submitLabel; validate(); toast(err.message);
     }
   });
 }
-function openRceVerifyWarning(d, job) {
-  const enabled = !!cfg.rce_verify_enabled;
-  const target = rceTargetPrefill(d, job);
-  const m = openModal(`<h2>ปลดล็อก RCE Verify?</h2>
-    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>นี่คือการตรวจแบบ active ไม่ใช่การสแกนโหมดรวดเร็วตามปกติ toolkit อาจส่ง proof payload และเรียกคำสั่ง <span class="mono">id</span> บนเป้าหมาย อาจเกิด log หรือผลกระทบต่อบริการได้ ใช้เฉพาะระบบที่ได้รับอนุญาต</span></p>
-    <p class="muted" style="margin-top:10px;font-size:13px">เป้าหมายตั้งต้น: <span class="mono">${esc(target)}</span> · ตรวจสอบหรือแก้ URL ก่อนเริ่มได้</p>
-    ${enabled ? `<p class="notice b-ok" style="margin-top:10px">${ic("check", 20)}<span>Backend เปิด RCE Verify แล้ว จะยังไม่มีการส่งคำขอจนกว่าจะยืนยันและกด “เริ่มตรวจ RCE” ในขั้นถัดไป</span></p>` : `<p class="notice b-warn" style="margin-top:10px">${ic("warn", 20)}<span>Backend ยังปิดอยู่ ผู้ดูแลต้องตั้ง <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> และตั้ง Bearer token ก่อน; ปุ่มนี้ไม่สามารถเปิดค่าฝั่งเซิร์ฟเวอร์แทนผู้ดูแลได้</span></p>`}
-    <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="button" class="btn btn-danger" data-rce-unlock ${enabled ? "" : "disabled"}>รับทราบและปลดล็อกแบบฟอร์ม</button></div>`, "คำเตือน RCE Verify");
-  const proceed = $("[data-rce-unlock]", m.el);
-  if (proceed && enabled) {
-    proceed.focus();
-    proceed.addEventListener("click", () => { m.close(); openRceVerifyForm(target); });
-  } else {
-    const cancel = $("[data-close]", m.el); cancel && cancel.focus();
-  }
-}
 function paintHost() {
   const host = $("#host"), d = R.job.devices.find((x) => x.ip === R.sel);
   if (!d) { host.innerHTML = `<div style="padding:40px 10px;text-align:center"><h2 style="font-size:18px">เลือกเครื่องจากรายการ</h2><p class="lead">รายละเอียด สิ่งที่ควรทำ และพอร์ตที่เปิดจะแสดงที่นี่</p></div>`; return; }
-  const s = SEV[d.severity], demo = !!R.job.demo_scenario, canRce = !demo && R.job.state === "completed", todo = todoFor(d), svc = services(d);
+  const s = SEV[d.severity], demo = !!R.job.demo_scenario, todo = todoFor(d), svc = services(d);
   const TABS = [["todo", "สิ่งที่ควรทำ", todo.length], ["find", "ที่ตรวจพบ", d.findings.length], ["ports", "พอร์ต", svc.length], ["info", "ข้อมูลเครื่อง", "·"]];
   host.innerHTML = `<div class="swap${R.swap}">
     <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">${cubeSvg(d)}
@@ -1242,7 +1202,6 @@ function paintHost() {
   <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
   <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">
     <button type="button" class="btn btn-g" id="recheck">${ic("refresh", 17)}<span>ตรวจซ้ำเครื่องนี้ (${esc(d.ip)})</span></button>
-    ${canRce ? `<button type="button" class="btn btn-danger" id="rce-verify">${ic("alert", 17)}<span>ตรวจ RCE Verify (Active)</span></button>` : ""}
     ${demo ? `<button type="button" class="btn" id="sim-patch">${ic("check", 17)}<span>จำลองการแก้ไข (ตัวอย่าง)</span></button>` : ""}
     <button type="button" class="btn" id="copy">${ic("copy", 17)}<span>คัดลอกสรุป</span></button>
     <span class="muted" style="font-size:12.5px">${d.checked_at ? `ตรวจซ้ำล่าสุด ${esc(fmtDate(d.checked_at))}` : d.patched_at ? `จำลองการแก้ไขเมื่อ ${esc(fmtDate(d.patched_at))} (ตัวอย่าง)` : "กดเพื่อพาไปหน้าสแกนพร้อมกรอก IP เครื่องนี้ให้อัตโนมัติ"}</span>
@@ -1258,8 +1217,6 @@ function paintHost() {
   $("#recheck").addEventListener("click", () => {
     prefillSingleHostScan(d.ip, R.job);
   });
-  const rceButton = $("#rce-verify");
-  if (rceButton) rceButton.addEventListener("click", () => openRceVerifyWarning(d, R.job));
   const simBtn = $("#sim-patch");
   if (simBtn) simBtn.addEventListener("click", async (e) => {
     const b = e.currentTarget, label = $("span", b), was = label.textContent;
