@@ -26,7 +26,7 @@ services:
       THSCAN_WEB_PORTS: "80,443,8080,8443"
       THSCAN_LIVENESS_PORTS: "22,445,3389,53"
       # --- Active RCE verification (API-only; disabled unless explicitly enabled) ---
-      THSCAN_RCE_VERIFY_ENABLED: "0"
+      THSCAN_RCE_VERIFY_ENABLED: "1"
       THSCAN_RCE_VERIFY_TOKEN: "${THSCAN_RCE_VERIFY_TOKEN:-}"
       THSCAN_RCE_VERIFY_TOTAL_TIMEOUT: "180"
       # Local time used for scheduled scans and for dates shown in the UI.
