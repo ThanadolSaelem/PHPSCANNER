@@ -78,6 +78,63 @@ def test_local_interface_telemetry_failure_fails_closed(monkeypatch):
     assert lan_fingerprint.discovery.local_ipv4_interfaces() == []
 
 
+def test_local_interface_inventory_excludes_down_interfaces(monkeypatch):
+    import psutil
+
+    address = SimpleNamespace(family=lan_fingerprint.socket.AF_INET, address="192.168.50.2", netmask="255.255.255.0")
+    monkeypatch.setattr(psutil, "net_if_addrs", lambda: {"en0": [address], "en1": [address]})
+    monkeypatch.setattr(psutil, "net_if_stats", lambda: {
+        "en0": SimpleNamespace(isup=True), "en1": SimpleNamespace(isup=False),
+    })
+    assert lan_fingerprint.discovery.local_ipv4_interfaces() == [
+        {"name": "en0", "address": "192.168.50.2", "cidr": "192.168.50.0/24"},
+    ]
+
+
+def test_macos_route_reader_requires_up_non_gateway_interface(monkeypatch):
+    monkeypatch.setattr(lan_fingerprint.sys, "platform", "darwin")
+    monkeypatch.setattr(lan_fingerprint.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stdout=(
+            "Destination Gateway Flags Netif Expire\n"
+            "default 192.168.50.1 UGSc en0\n"
+            "192.168.50/24 link#4 UCS en0\n"
+            "10.0.0/8 192.168.50.1 UGSc en0\n"
+        ),
+    ))
+    monkeypatch.setattr(lan_fingerprint, "_selected_route_source", lambda _target: "192.168.50.2")
+    routes = lan_fingerprint._load_route_table()
+    assert routes is not None
+    target = lan_fingerprint.ipaddress.IPv4Address("192.168.50.20")
+    assert lan_fingerprint._has_direct_route(target, _IFACES[0], routes)
+    assert not lan_fingerprint._has_direct_route(
+        lan_fingerprint.ipaddress.IPv4Address("10.0.0.20"), _IFACES[0], routes
+    )
+
+
+def test_windows_route_reader_rejects_gateway_and_uses_local_interface_address(monkeypatch):
+    monkeypatch.setattr(lan_fingerprint.sys, "platform", "win32")
+    monkeypatch.setattr(lan_fingerprint.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stdout=(
+            "Network Destination Netmask Gateway Interface Metric\n"
+            "0.0.0.0 0.0.0.0 192.168.50.1 192.168.50.2 25\n"
+            "192.168.50.0 255.255.255.0 On-link 192.168.50.2 281\n"
+            "10.0.0.0 255.0.0.0 192.168.50.1 192.168.50.2 25\n"
+        ),
+    ))
+    monkeypatch.setattr(lan_fingerprint, "_selected_route_source", lambda _target: "192.168.50.2")
+    routes = lan_fingerprint._load_route_table()
+    assert routes is not None
+    windows_interface = {"name": "Ethernet", "address": "192.168.50.2", "cidr": "192.168.50.0/24"}
+    assert lan_fingerprint._has_direct_route(
+        lan_fingerprint.ipaddress.IPv4Address("192.168.50.20"), windows_interface, routes
+    )
+    assert not lan_fingerprint._has_direct_route(
+        lan_fingerprint.ipaddress.IPv4Address("10.0.0.20"), windows_interface, routes
+    )
+
+
 def test_device_classifier_requires_specific_model_hint_for_phone_claim():
     label, confidence, evidence = lan_fingerprint._classify([
         "mDNS TXT model=iPhone16,2",
