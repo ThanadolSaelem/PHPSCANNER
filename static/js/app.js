@@ -385,8 +385,20 @@ addEventListener("resize", () => { clearTimeout(fitTimer); fitTimer = setTimeout
 function setTopSide(html) { $("#top-side").innerHTML = html; }
 addEventListener("hashchange", route);
 
-async function startScan(body) {
+function takeRceIntent(id) {
+  const key = `thscan:rce-after:${id}`;
+  try {
+    const pending = sessionStorage.getItem(key) === "1";
+    if (pending) sessionStorage.removeItem(key);
+    return pending;
+  } catch { return false; }
+}
+async function startScan(body, { rceVerifyAfter = false } = {}) {
   const job = await api("/api/scans", { method: "POST", body: JSON.stringify(body) });
+  if (rceVerifyAfter) {
+    try { sessionStorage.setItem(`thscan:rce-after:${job.id}`, "1"); }
+    catch { toast("เริ่มสแกนแล้ว แต่บันทึกขั้นตอน RCE Verify ในแท็บนี้ไม่ได้ จึงจะไม่เรียก RCE อัตโนมัติ"); }
+  }
   location.hash = `#/scan/${job.id}`;
 }
 function openDemoPicker() {
@@ -411,7 +423,7 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", report: null, reportFor: "", detected: [] };
+  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, report: null, reportFor: "", detected: [] };
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
   ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์หรือชื่อโดเมน", "globe"],
@@ -523,7 +535,7 @@ async function viewScan(_, alive) {
   $("#go").addEventListener("click", async (e) => {
     const plan = scanPlan(), btn = e.currentTarget;
     btn.disabled = true;
-    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2 }); }
+    try { await startScan({ ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2 }, { rceVerifyAfter: S.mode2 === "fast" && S.rceVerify }); }
     catch (err) { toast(err.message); btn.disabled = false; }
   });
 
@@ -587,9 +599,19 @@ async function viewScan(_, alive) {
     if (e.target.id === "delay") S.delay = +e.target.value;
     renderAdvValues(); updateScan();
   });
+  $("#p-adv").addEventListener("change", (e) => {
+    if (e.target.id !== "rce-after") return;
+    S.rceVerify = e.target.checked;
+    renderAdvPanel(); updateScan();
+    const next = $("#rce-after"); next && next.focus();
+  });
   $("#p-adv").addEventListener("click", (e) => {
     const b = e.target.closest("[data-mode2]");
-    if (b && !b.disabled && b.dataset.mode2 !== S.mode2) { S.mode2 = b.dataset.mode2; renderAdvPanel(); updateScan(); }
+    if (b && !b.disabled && b.dataset.mode2 !== S.mode2) {
+      S.mode2 = b.dataset.mode2;
+      if (S.mode2 !== "fast") S.rceVerify = false;
+      renderAdvPanel(); updateScan();
+    }
   });
 }
 // A website-mode entry that is really an IP (optionally with a port), e.g.
@@ -685,6 +707,10 @@ function renderAdvPanel() {
       <button type="button" class="opt" data-mode2="fast" aria-pressed="${S.mode2 === "fast"}"><span style="min-width:0"><span class="ot">โหมดรวดเร็ว</span><span class="od">ตรวจพอร์ตและช่องโหว่มาตรฐาน</span></span></button>
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
     </div>
+    ${S.mode2 === "fast" ? `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:14px;background:${cfg.rce_verify_enabled ? "var(--soft)" : "#F7F7FA"}">
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>เพิ่ม RCE Verify หลังสแกนเร็วเสร็จ <span style="font-weight:400;color:var(--muted)">— จะเปิดคำเตือนและแบบฟอร์มก่อนส่ง active request</span></span></label>
+      ${cfg.rce_verify_enabled ? "" : `<p class="od" style="margin-top:6px">ผู้ดูแลต้องเปิด <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> ฝั่งเซิร์ฟเวอร์ก่อน</p>`}
+    </div>` : ""}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
     <label style="display:block"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">ความเร็ว ${tip("จำนวนการเชื่อมต่อพร้อมกัน ลดลงได้ถ้าเครือข่ายช้า หรือไม่อยากกระทบการใช้งาน")}</span><b style="color:var(--ink)" id="speed-v"></b></span>
       <input class="rng" id="speed" type="range" min="5" max="${cfg.max_concurrency}" step="5" value="${S.speed}" aria-label="ความเร็ว"></label>
@@ -774,7 +800,7 @@ function updateScan(modeChanged) {
   const pc = portCount(S.profile, S.custom);
   $("#sum-target").textContent = plan.summary;
   $("#sum-ports").textContent = pc.error ? "รูปแบบพอร์ตไม่ถูกต้อง" : `${(PROFILE_TEXT[S.profile] || [S.profile])[0]} · ${num(pc.n)} พอร์ต`;
-  $("#sum-adv").textContent = `${S.mode2 === "deep" ? "โหมดเชิงลึก" : "โหมดรวดเร็ว"} · ${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`}`;
+  $("#sum-adv").textContent = `${S.mode2 === "deep" ? "โหมดเชิงลึก" : "โหมดรวดเร็ว"} · ${S.speed >= cfg.max_concurrency ? "เร็วสุด" : `${S.speed} งาน`}${S.mode2 === "fast" && S.rceVerify ? " · RCE Verify หลังสแกน" : ""}`;
   // readiness: the button is enabled only when the server would accept the request
   const budgetOk = !pc.error && plan.count * pc.n <= cfg.max_port_probes;
   const ok = plan.valid && plan.scoped && !plan.pending && !pc.error && budgetOk;
@@ -790,7 +816,7 @@ function updateScan(modeChanged) {
     ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
     ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
     ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · อ่านอย่างเดียว ไม่ทำลายระบบ</div></div>`;
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "fast" && S.rceVerify ? "RCE Verify จะเริ่มหลังสแกน เมื่อกรอก token และยืนยันในแบบฟอร์ม" : "สแกนปกติแบบอ่านอย่างเดียว"}</div></div>`;
   $("#go").disabled = !ok;
 }
 
@@ -942,6 +968,10 @@ async function viewResults([id], alive) {
   if (!R.job || R.job.id !== job.id) Object.assign(R, { f: "all", q: "", sel: null, tab: "todo" });
   R.job = job;
   renderResults();
+  if (takeRceIntent(job.id)) {
+    if (job.state === "completed" && !job.demo_scenario) openRceVerifyStage(job);
+    else toast("RCE Verify ไม่ได้เริ่ม เพราะ scan ไม่ได้เสร็จสมบูรณ์หรือเป็นข้อมูลตัวอย่าง");
+  }
 }
 const portsChecked = (j) => ((j.scanned_ports || []).length ? `ตรวจ ${num(j.scanned_ports.length)} พอร์ต · ` : "");
 function counts(j) { const c = { critical: 0, high: 0, low: 0, safe: 0 }; j.devices.forEach((d) => c[d.severity]++); return c; }
@@ -1158,6 +1188,36 @@ function openRceVerifyWarning(d, job) {
   } else {
     const cancel = $("[data-close]", m.el); cancel && cancel.focus();
   }
+}
+function openRceVerifyStage(job) {
+  const candidates = (job.devices || []).filter((d) => (d.open_ports || []).length > 0);
+  if (!candidates.length) {
+    openModal(`<h2>ข้าม RCE Verify</h2>
+      <p class="notice b-warn" style="margin-top:12px">${ic("warn", 20)}<span>ผลสแกนนี้ไม่พบพอร์ตเว็บที่ตอบกลับ จึงไม่มี host ให้เลือกสำหรับ RCE Verify และยังไม่มี active request ถูกส่ง</span></p>
+      <div class="modal-foot"><button type="button" class="btn btn-g" data-close>กลับไปดูผลสแกน</button></div>`, "ไม่มีเว็บเป้าหมายสำหรับ RCE Verify");
+    return;
+  }
+  const enabled = !!cfg.rce_verify_enabled;
+  const option = (d) => `<option value="${esc(d.ip)}">${esc(d.ip)}${d.hostname ? ` · ${esc(d.hostname)}` : ""} · พอร์ตเว็บ ${esc((d.open_ports || []).join(", "))}</option>`;
+  const first = candidates[0];
+  const m = openModal(`<h2>ผลสแกนเร็วพร้อมแล้ว</h2>
+    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>ก่อน RCE Verify จะส่ง active request เลือก host ที่ได้รับอนุญาตด้านล่าง ขั้นนี้ยังไม่ส่ง payload หรือเรียกคำสั่งใด ๆ</span></p>
+    <label style="display:block;margin-top:12px"><span class="lbl">Host ที่จะตรวจ</span><select class="inp" id="rce-stage-host">${candidates.map(option).join("")}</select></label>
+    <p class="muted" style="margin-top:8px;font-size:13px">Target URL ที่จะใส่ในแบบฟอร์ม: <span class="mono" id="rce-stage-target">${esc(rceTargetPrefill(first, job))}</span></p>
+    ${enabled ? `<p class="notice b-ok" style="margin-top:10px">${ic("check", 20)}<span>Backend เปิดใช้งานแล้ว ขั้นถัดไปจะให้กรอก Bearer token และยืนยันอีกครั้งก่อนส่งคำขอ</span></p>` : `<p class="notice b-warn" style="margin-top:10px">${ic("warn", 20)}<span>Backend ยังปิดอยู่ ผู้ดูแลต้องตั้ง <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> และ Bearer token; popup นี้ไม่สามารถเปิดค่าฝั่งเซิร์ฟเวอร์ได้</span></p>`}
+    <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="button" class="btn btn-danger" data-rce-stage-continue ${enabled ? "" : "disabled"}>ไปกรอกแบบฟอร์ม RCE</button></div>`, "เตรียม RCE Verify หลังสแกนเร็ว");
+  const select = $("#rce-stage-host", m.el), targetText = $("#rce-stage-target", m.el), proceed = $("[data-rce-stage-continue]", m.el);
+  select.addEventListener("change", () => {
+    const d = candidates.find((x) => x.ip === select.value);
+    if (d) targetText.textContent = rceTargetPrefill(d, job);
+  });
+  select.focus();
+  if (enabled) proceed.addEventListener("click", () => {
+    const d = candidates.find((x) => x.ip === select.value);
+    if (!d) return;
+    const target = rceTargetPrefill(d, job);
+    m.close(); openRceVerifyForm(target);
+  });
 }
 function paintHost() {
   const host = $("#host"), d = R.job.devices.find((x) => x.ip === R.sel);
