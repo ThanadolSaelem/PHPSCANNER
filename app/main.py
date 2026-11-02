@@ -66,6 +66,7 @@ async def get_config() -> dict:
         "deep_available": True,
         "nmap_available": nmap_scan.nmap_available(),
         "chain_available": chain_runner.available(),
+        "rce_verify_enabled": settings.rce_verify_enabled,
         "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
         "max_port_probes": settings.max_port_probes,
