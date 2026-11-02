@@ -123,7 +123,18 @@ async def resolve_sites(q: str = Query("", max_length=4096)) -> dict:
 
 
 @app.post("/api/scans")
-async def create_scan(req: ScanRequest) -> dict:
+async def create_scan(
+    req: ScanRequest,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    if req.rce_verify is not None:
+        _require_rce_authorization(req.rce_verify, authorization)
+        _validate_rce_verify_request(req.rce_verify)
+        if req.demo_scenario:
+            raise HTTPException(400, "RCE Verify ใช้กับงานสาธิตไม่ได้")
+        if req.scan_mode != "fast":
+            raise HTTPException(400, "RCE Verify แบบต่อเนื่องรองรับเฉพาะ fast scan")
+
     # fields the server owns
     req.site_hosts, req.extra_web_ports = {}, []
     if req.demo_scenario:
@@ -221,12 +232,8 @@ async def get_scan_summary(job_id: str) -> dict:
     return job.summary()
 
 
-@app.post("/api/rce-verify")
-async def rce_verify(
-    req: RceVerifyRequest,
-    authorization: str | None = Header(default=None),
-) -> dict:
-    """Run the upstream active RCE verifier for an operator-confirmed URL."""
+def _require_rce_authorization(req: RceVerifyRequest, authorization: str | None) -> None:
+    """Enforce all RCE Verify access gates in one place."""
     if not settings.rce_verify_enabled:
         raise HTTPException(403, "ปิด RCE Verify อยู่ (ต้องเปิด THSCAN_RCE_VERIFY_ENABLED=1)")
     expected_token = settings.rce_verify_token
@@ -240,6 +247,9 @@ async def rce_verify(
     if not req.confirm:
         raise HTTPException(400, "ต้องส่ง confirm=true เพื่อยืนยันการตรวจแบบ active")
 
+
+def _validate_rce_verify_request(req: RceVerifyRequest) -> None:
+    """Validate RCE Verify inputs before any scan or active request begins."""
     for value, label in ((req.target_url, "target_url"),
                          (req.lfi_url, "lfi_url"),
                          (req.session_endpoint, "session_endpoint")):
@@ -261,6 +271,16 @@ async def rce_verify(
         raise HTTPException(400, "operator ห้ามมีอักขระควบคุมหรือขึ้นบรรทัดใหม่")
     if not chain_runner.rce_verify_available():
         raise HTTPException(503, "security-audit-toolkit run_rce_verify ไม่พร้อมใช้งาน")
+
+
+@app.post("/api/rce-verify")
+async def rce_verify(
+    req: RceVerifyRequest,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Run the upstream active RCE verifier for an operator-confirmed URL."""
+    _require_rce_authorization(req, authorization)
+    _validate_rce_verify_request(req)
 
     run_id = uuid.uuid4().hex
     evidence_dir = os.path.join(settings.data_dir, "rce-verify", run_id)

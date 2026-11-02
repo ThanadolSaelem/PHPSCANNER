@@ -38,6 +38,16 @@ class JobState(str, Enum):
     failed = "failed"
 
 
+class RceVerifyRequest(CompatBaseModel):
+    target_url: str = Field(min_length=8, max_length=2048)
+    lfi_url: Optional[str] = Field(default=None, max_length=4096)
+    session_endpoint: Optional[str] = Field(default=None, max_length=2048)
+    timeout: float = Field(default=10.0, ge=1.0, le=60.0)
+    no_verify_ssl: bool = False
+    operator: str = Field(default="thscan-operator", min_length=1, max_length=120)
+    confirm: bool = False
+
+
 class ScanRequest(CompatBaseModel):
     targets: List[str] = Field(default_factory=list)
     # websites given by link/domain; resolved by the API into ``targets``
@@ -52,6 +62,8 @@ class ScanRequest(CompatBaseModel):
     polite_delay_ms: Optional[int] = None
     note: str = Field("")
     demo_scenario: Optional[str] = Field(None)
+    # optional active verification, authorized at request time and run after fast scan
+    rce_verify: Optional[RceVerifyRequest] = None
     # set by the server, never trusted from the client
     site_hosts: Dict[str, str] = Field(default_factory=dict)   # ip -> hostname
     extra_web_ports: List[int] = Field(default_factory=list)   # ports named in links
@@ -142,16 +154,6 @@ class ScheduleItem(CompatBaseModel):
     next_run: Optional[str] = None
 
 
-class RceVerifyRequest(CompatBaseModel):
-    target_url: str = Field(min_length=8, max_length=2048)
-    lfi_url: Optional[str] = Field(default=None, max_length=4096)
-    session_endpoint: Optional[str] = Field(default=None, max_length=2048)
-    timeout: float = Field(default=10.0, ge=1.0, le=60.0)
-    no_verify_ssl: bool = False
-    operator: str = Field(default="thscan-operator", min_length=1, max_length=120)
-    confirm: bool = False
-
-
 class ScanJob(CompatBaseModel):
     id: str
     state: JobState = JobState.queued
@@ -172,6 +174,7 @@ class ScanJob(CompatBaseModel):
     chain_target_url: str = ""            # "fast" | "deep"
     note_deep: Optional[str] = None    # why deep mode fell back, if it did
     chain_result: Optional[Dict[str, Any]] = None
+    rce_verify_result: Optional[Dict[str, Any]] = None
 
     def security_score(self) -> int:
         if not self.devices:
@@ -224,6 +227,7 @@ class ScanJob(CompatBaseModel):
             "port_profile": self.request.port_profile,
             "scanned_port_count": len(self.scanned_ports),
             "sites": self.request.sites,
+            "rce_verify_requested": self.request.rce_verify is not None,
             "security_score": self.security_score(),
             "security_grade": self.security_grade(),
         }

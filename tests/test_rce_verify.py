@@ -141,6 +141,111 @@ def test_standalone_api_rejects_invalid_urls_and_disabled_mode(monkeypatch, tmp_
     assert disabled.status_code == 403
 
 
+def test_combined_scan_api_requires_authorization_and_queues_rce_options(monkeypatch, tmp_path):
+    main, _ = _configure_api(monkeypatch, tmp_path)
+    monkeypatch.setattr(main.settings, "enforce_scope", False)
+    monkeypatch.setattr(main.chain_runner, "rce_verify_available", lambda: True)
+    calls = {}
+
+    class FakeJob:
+        id = "combined-job"
+
+        @staticmethod
+        def summary():
+            return {"id": "combined-job", "state": "queued", "rce_verify_requested": True}
+
+    class FakeStore:
+        audit = SimpleNamespace(record=lambda *args, **kwargs: None)
+
+        async def create(self, request):
+            calls["request"] = request
+            return FakeJob()
+
+    monkeypatch.setattr(main, "store", FakeStore())
+    body = {
+        "targets": ["192.0.2.10"],
+        "port_profile": "web",
+        "scan_mode": "fast",
+        "rce_verify": {
+            "target_url": "http://192.0.2.10/",
+            "timeout": 8,
+            "operator": "unit-test",
+            "confirm": True,
+        },
+    }
+    headers = {"Authorization": f"Bearer {_TOKEN}"}
+
+    with TestClient(main.app) as client:
+        unauthenticated = client.post("/api/scans", json=body)
+        no_consent = client.post(
+            "/api/scans",
+            json={**body, "rce_verify": {**body["rce_verify"], "confirm": False}},
+            headers=headers,
+        )
+        accepted = client.post("/api/scans", json=body, headers=headers)
+
+    assert unauthenticated.status_code == 401
+    assert no_consent.status_code == 400
+    assert accepted.status_code == 200
+    assert calls["request"].rce_verify.target_url == "http://192.0.2.10/"
+    assert calls["request"].rce_verify.confirm is True
+    assert "authorization" not in calls["request"].dump_json_dict()
+
+
+def test_engine_chains_rce_after_fast_scan_and_skips_unscanned_url(monkeypatch, tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.config import Settings
+    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest
+    from app.scanner import engine as eng
+
+    calls = {}
+
+    async def fake_scan(_engine, job, cancel):
+        job.devices = [Device(ip="192.0.2.10", open_ports=[80])]
+        job.progress.total_ips = 1
+        job.progress.probed = 1
+        job.progress.to_inspect = 1
+        job.progress.inspected = 1
+
+    async def fake_verify(target, settings, **kwargs):
+        calls.update(target=target, phase=job.progress.phase, **kwargs)
+        return {"ran": True, "target": target, "verdict": "NOT_CONFIRMED",
+                "summary": {}, "evidence_dir": kwargs["evidence_dir"], "evidence_files": []}
+
+    settings = Settings()
+    settings.data_dir = str(tmp_path)
+    request = ScanRequest(
+        targets=["192.0.2.10"],
+        scan_mode="fast",
+        rce_verify=RceVerifyRequest(target_url="http://192.0.2.10/", confirm=True),
+    )
+    job = ScanJob(id="rce-job", created_at=datetime.now(timezone.utc), request=request)
+    monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
+    monkeypatch.setattr(eng.chain_runner, "run_rce_verify_target", fake_verify)
+
+    asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
+
+    assert job.state.value == "completed", job.error
+    assert calls["phase"] == "rce_verify"
+    assert calls["target"] == "http://192.0.2.10/"
+    assert job.rce_verify_result["verdict"] == "NOT_CONFIRMED"
+    assert job.rce_verify_result["evidence_dir"] == "rce-verify/rce-job"
+
+    calls.clear()
+    request = ScanRequest(
+        targets=["192.0.2.10"],
+        scan_mode="fast",
+        rce_verify=RceVerifyRequest(target_url="http://192.0.2.11/", confirm=True),
+    )
+    job = ScanJob(id="skip-job", created_at=datetime.now(timezone.utc), request=request)
+    asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
+    assert not calls
+    assert job.rce_verify_result["verdict"] == "SKIPPED"
+    assert "ไม่มีการส่ง active request" in job.rce_verify_result["error"]
+
+
 def test_toolkit_keeps_upstream_redirect_behavior():
     import security_audit_toolkit as toolkit
 

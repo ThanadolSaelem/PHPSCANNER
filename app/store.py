@@ -106,6 +106,16 @@ class JobStore:
             job.finished_at = datetime.now(timezone.utc)
             if job.started_at:
                 job.duration_s = round((job.finished_at - job.started_at).total_seconds(), 2)
+        if job.rce_verify_result and job.request.rce_verify:
+            request = job.request.rce_verify
+            self.audit.record(
+                "rce_verify",
+                job_id=job.id,
+                target=request.target_url,
+                verdict=job.rce_verify_result.get("verdict"),
+                operator=request.operator,
+                ssl_verify=not request.no_verify_ssl,
+            )
         summ = job.summary()
         self.audit.record(
             "scan_finished",

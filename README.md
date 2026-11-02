@@ -158,6 +158,8 @@ scan job และรับ public target ได้ โดย API ส่ง owne
   → เทียบเวอร์ชัน PHP กับรุ่นที่แพตช์ → ระดับความรุนแรง + สิ่งที่ควรทำ
 ```
 
+เมื่อเลือก RCE Verify ในหน้าเว็บ แบบฟอร์มและการยืนยัน active จะแสดงก่อนเริ่ม จากนั้นคำขอเดียวสร้าง fast-scan job; เมื่อ fast scan เสร็จ job เดิมจะเรียก RCE Verify ต่อกับ URL/พอร์ตที่อยู่ในผลสแกน โดยไม่เริ่ม full scan ซ้ำ Bearer token ส่งผ่าน `Authorization` header และไม่ถูกเก็บใน job; ถ้า URL/พอร์ตไม่ปรากฏในผล fast scan ระบบจะข้าม active request
+
 ### การกรองผลปลอม (middlebox)
 
 บางเครือข่ายมี proxy หรือ firewall ที่รับการเชื่อมต่อแทนทุกที่อยู่ ทำให้ดูเหมือนมีเครื่องออนไลน์ทุก IP
@@ -200,7 +202,7 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 |---|---|---|
 | `GET` | `/api/config` | ขอบเขต ลิมิต พอร์ต timezone รายการตัวอย่าง |
 | `GET` | `/api/autodetect` | วงเครือข่ายของเครื่องนี้ |
-| `POST` | `/api/scans` | `{"targets": ["10.0.0.0/24"]}` หรือ `{"sites": ["https://www.agency.go.th"]}` หรือ `{"demo_scenario": "gov-cert"}` · โหมด chain รับ IP เดี่ยว หรือ URL เดี่ยวที่ resolve เป็น IPv4 เดียว โดยเพิ่ม `"scan_mode": "chain"` และ `"rce_chain_confirmed": true` (เซิร์ฟเวอร์ยังบังคับ scope หลัก) |
+| `POST` | `/api/scans` | สร้าง scan job เช่น `{"targets": ["10.0.0.0/24"]}` หรือ `{"sites": ["https://www.agency.go.th"]}`; one-click fast + RCE เพิ่ม `rce_verify` object พร้อม `target_url`/options และ `confirm: true` พร้อมส่ง Bearer token ใน `Authorization` header (ใช้ได้เฉพาะ fast mode; token ไม่ถูกเก็บใน job) |
 | `GET` | `/api/resolve?q=` | ตรวจลิงก์ล่วงหน้า: IP, โดเมนหน่วยงาน, อยู่ในขอบเขตไหม |
 | `GET` / `DELETE` | `/api/scans` | รายการประวัติ / ล้างประวัติ |
 | `GET` | `/api/scans/{id}` · `/summary` | ผลเต็ม / สรุปสำหรับ poll |

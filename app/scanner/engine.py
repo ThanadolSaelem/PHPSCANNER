@@ -5,9 +5,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List
+from urllib.parse import urlsplit
 
 from ..config import Settings
 from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity
@@ -26,8 +29,7 @@ class ScanEngine:
     async def run(self, job: ScanJob, cancel: asyncio.Event) -> None:
         job.state = JobState.running
         job.started_at = _now()
-        coro = self._run_demo(job, cancel) if job.request.demo_scenario else self._run(job, cancel)
-        run_task = asyncio.create_task(coro)
+        run_task = asyncio.create_task(self._run_pipeline(job, cancel))
         cancel_task = asyncio.create_task(cancel.wait())
         try:
             done, _ = await asyncio.wait(
@@ -60,6 +62,72 @@ class ScanEngine:
                 job.duration_s = round(
                     (job.finished_at - job.started_at).total_seconds(), 2
                 )
+
+    async def _run_pipeline(self, job: ScanJob, cancel: asyncio.Event) -> None:
+        if job.request.demo_scenario:
+            await self._run_demo(job, cancel)
+        else:
+            await self._run(job, cancel)
+        if cancel.is_set() or job.request.rce_verify is None or job.request.demo_scenario:
+            return
+        await self._run_rce_verify(job, cancel)
+
+    async def _run_rce_verify(self, job: ScanJob, cancel: asyncio.Event) -> None:
+        request = job.request.rce_verify
+        if request is None or cancel.is_set():
+            return
+
+        parsed = urlsplit(request.target_url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        scanned = any(
+            host in {
+                device.ip.lower(),
+                (device.hostname or "").lower().rstrip("."),
+                (job.request.site_hosts.get(device.ip) or "").lower().rstrip("."),
+            }
+            and port in device.open_ports
+            for device in job.devices
+        )
+        if not scanned:
+            job.progress.phase = "rce_verify"
+            job.rce_verify_result = {
+                "ran": False,
+                "target": request.target_url,
+                "verdict": "SKIPPED",
+                "summary": {},
+                "evidence_dir": None,
+                "evidence_files": [],
+                "error": "URL/port ไม่พบในผล fast scan จึงไม่มีการส่ง active request",
+            }
+            return
+
+        job.progress.phase = "rce_verify"
+        evidence_dir = os.path.join(self.settings.data_dir, "rce-verify", job.id)
+        result = await chain_runner.run_rce_verify_target(
+            request.target_url,
+            self.settings,
+            evidence_dir=evidence_dir,
+            operator=request.operator,
+            lfi_url=request.lfi_url,
+            session_endpoint=request.session_endpoint,
+            timeout=request.timeout,
+            no_verify_ssl=request.no_verify_ssl,
+        )
+        result["target"] = request.target_url
+        if result.get("evidence_dir"):
+            try:
+                data_root = Path(self.settings.data_dir).resolve()
+                expected = Path(evidence_dir).resolve()
+                evidence_path = Path(result["evidence_dir"]).resolve()
+                if evidence_path != expected or not evidence_path.is_relative_to(data_root):
+                    raise ValueError("evidence path escaped its run directory")
+                result["evidence_dir"] = os.path.relpath(evidence_path, data_root)
+            except (OSError, TypeError, ValueError):
+                result["evidence_dir"] = None
+                result["error"] = "toolkit returned an invalid evidence path"
+                result["verdict"] = "ERROR"
+        job.rce_verify_result = result
 
     @staticmethod
     def _label(req) -> str:
