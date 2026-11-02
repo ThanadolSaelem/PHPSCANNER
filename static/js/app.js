@@ -713,7 +713,7 @@ function renderAdvPanel() {
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
     </div>
     ${S.mode2 === "fast" ? `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:14px;background:${cfg.rce_verify_enabled ? "var(--soft)" : "#F7F7FA"}">
-      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ต่อ RCE Verify หลัง fast scan <span style="font-weight:400;color:var(--muted)">— กรอก URL/ค่าตรวจและยืนยันก่อนเริ่มสแกน</span></span></label>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ยืนยันใช้ RCE Verify แบบ active หลัง fast scan <span style="font-weight:400;color:var(--muted)">— เลือกเฉพาะเป้าหมายที่ได้รับอนุญาต; การเลือกนี้เป็นการยืนยันสำหรับงานนี้</span></span></label>
       ${cfg.rce_verify_enabled ? "" : `<p class="od" style="margin-top:6px">ผู้ดูแลต้องเปิด <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> ฝั่งเซิร์ฟเวอร์ก่อน</p>`}
     </div>` : ""}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
@@ -1144,7 +1144,7 @@ function openRceVerifyForm(target, scanBody) {
   const submitLabel = "เริ่ม fast scan และต่อ RCE Verify";
   let launched = false;
   const m = openModal(`<h2>ตั้งค่า fast scan + RCE Verify</h2>
-    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>หลังส่งแบบฟอร์ม ระบบจะทำ fast scan หนึ่งรอบ แล้วเรียก RCE Verify ต่อกับ URL นี้อัตโนมัติ โดยไม่มี full scan รอบที่สอง การตรวจ RCE เป็น active และอาจส่ง proof payload ไปยังเป้าหมาย</span></p>
+    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>การเลือก RCE Verify บนหน้า scan เป็นการยืนยัน active test สำหรับงานนี้ หลังส่งแบบฟอร์ม ระบบจะทำ fast scan หนึ่งรอบแล้วเรียก RCE Verify ต่อกับ URL นี้อัตโนมัติ การตรวจอาจส่ง proof payload ไปยังเป้าหมาย ใช้เฉพาะเป้าหมายที่ได้รับอนุญาต</span></p>
     <p class="lead">Bearer token ใช้ยืนยันคำขอครั้งนี้เท่านั้นและไม่ถูกบันทึกใน browser หรือ scan job</p>
     <form id="rce-form" style="display:grid;gap:10px;margin-top:14px">
       <label><span class="lbl">Target URL</span><input class="inp" id="rce-target" type="url" required maxlength="2048" autocomplete="url" value="${esc(target)}"></label>
@@ -1156,18 +1156,17 @@ function openRceVerifyForm(target, scanBody) {
       </div>
       <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="rce-no-ssl" type="checkbox" style="margin-top:5px"><span>ปิดการตรวจ SSL certificate (ใช้เฉพาะกรณีจำเป็น เช่น self-signed)</span></label>
       <label><span class="lbl">Bearer token</span><input class="inp" id="rce-token" type="password" autocomplete="off" required placeholder="กรอก token จากผู้ดูแลระบบ"></label>
-      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="rce-consent" type="checkbox" required style="margin-top:5px"><span>ฉันได้รับอนุญาตให้ทดสอบเป้าหมายนี้ และเข้าใจว่าเป็นการตรวจแบบ active</span></label>
       <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="submit" class="btn btn-danger" id="rce-run" disabled>${submitLabel}</button></div>
     </form>`, "ตั้งค่าการตรวจ RCE Verify", () => {
       if (launched) return;
       S.rceVerify = false;
       renderAdvPanel(); updateScan();
       const checkbox = $("#rce-after"); checkbox && checkbox.focus();
-    });
+  });
   $("#rce-target", m.el).focus();
-  const form = $("#rce-form", m.el), token = $("#rce-token", m.el), consent = $("#rce-consent", m.el), run = $("#rce-run", m.el);
-  const validate = () => { run.disabled = !token.value.trim() || !consent.checked; };
-  token.addEventListener("input", validate); consent.addEventListener("change", validate);
+  const form = $("#rce-form", m.el), token = $("#rce-token", m.el), run = $("#rce-run", m.el);
+  const validate = () => { run.disabled = !token.value.trim(); };
+  token.addEventListener("input", validate);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
