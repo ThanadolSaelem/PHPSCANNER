@@ -142,6 +142,16 @@ class ScheduleItem(CompatBaseModel):
     next_run: Optional[str] = None
 
 
+class RceVerifyRequest(CompatBaseModel):
+    target_url: str = Field(min_length=8, max_length=2048)
+    lfi_url: Optional[str] = Field(default=None, max_length=4096)
+    session_endpoint: Optional[str] = Field(default=None, max_length=2048)
+    timeout: float = Field(default=10.0, ge=1.0, le=60.0)
+    no_verify_ssl: bool = False
+    operator: str = Field(default="thscan-operator", min_length=1, max_length=120)
+    confirm: bool = False
+
+
 class ScanJob(CompatBaseModel):
     id: str
     state: JobState = JobState.queued

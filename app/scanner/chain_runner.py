@@ -370,3 +370,45 @@ async def run_for_targets(
 
     await asyncio.gather(*(_one(t) for t in batch))
     return out
+
+
+
+def rce_verify_available() -> bool:
+    """Return True only when the toolkit module exposes its active verifier."""
+    try:
+        from . import rce_verify
+        return rce_verify.available()
+    except Exception:  # pragma: no cover - optional toolkit/package failure
+        return False
+
+
+async def run_rce_verify_target(
+    target_url: str,
+    settings: Settings,
+    *,
+    evidence_dir: Optional[str] = None,
+    operator: Optional[str] = None,
+    lfi_url: Optional[str] = None,
+    session_endpoint: Optional[str] = None,
+    timeout: float = 10.0,
+    no_verify_ssl: bool = False,
+) -> Dict[str, Any]:
+    """Run the bounded toolkit verifier for a scan-validated URL."""
+    try:
+        from . import rce_verify
+    except Exception:  # pragma: no cover - optional toolkit/package failure
+        return {
+            "ran": False, "target": target_url, "verdict": "ERROR", "summary": {},
+            "evidence_dir": None, "evidence_files": [],
+            "error": "rce_verify adapter is unavailable",
+        }
+    return await rce_verify.run(
+        target_url,
+        evidence_dir=evidence_dir,
+        lfi_url=lfi_url,
+        session_endpoint=session_endpoint,
+        timeout=timeout,
+        total_timeout=float(getattr(settings, "rce_verify_total_timeout_s", 180)),
+        no_verify_ssl=no_verify_ssl,
+        operator=operator,
+    )

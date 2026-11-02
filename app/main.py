@@ -2,18 +2,22 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
 import json
 import os
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import settings
-from .models import ScanRequest, ScheduleCreate
+from .models import JobState, RceVerifyRequest, ScanRequest, ScheduleCreate
 from .scanner import demo_scenarios, discovery, netlimit, ports, sites
 from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
 from .scanner import chain_runner, nmap_scan
@@ -214,6 +218,74 @@ async def get_scan_summary(job_id: str) -> dict:
     if job is None:
         raise HTTPException(404, "ไม่พบงานสแกน")
     return job.summary()
+
+
+@app.post("/api/rce-verify")
+async def rce_verify(
+    req: RceVerifyRequest,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Run the upstream active RCE verifier for an operator-confirmed URL."""
+    if not settings.rce_verify_enabled:
+        raise HTTPException(403, "ปิด RCE Verify อยู่ (ต้องเปิด THSCAN_RCE_VERIFY_ENABLED=1)")
+    expected_token = settings.rce_verify_token
+    if len(expected_token) < 32:
+        raise HTTPException(503, "ตั้ง THSCAN_RCE_VERIFY_TOKEN เป็น secret แบบสุ่มอย่างน้อย 32 ตัวอักษร")
+    scheme, separator, presented_token = (authorization or "").partition(" ")
+    if (scheme.lower() != "bearer" or not separator or not presented_token
+            or not hmac.compare_digest(presented_token, expected_token)):
+        raise HTTPException(401, "ต้องใช้ Bearer token สำหรับ RCE Verify",
+                            headers={"WWW-Authenticate": "Bearer"})
+    if not req.confirm:
+        raise HTTPException(400, "ต้องส่ง confirm=true เพื่อยืนยันการตรวจแบบ active")
+
+    for value, label in ((req.target_url, "target_url"),
+                         (req.lfi_url, "lfi_url"),
+                         (req.session_endpoint, "session_endpoint")):
+        if value is None:
+            continue
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise HTTPException(400, f"{label} ห้ามมีอักขระควบคุม")
+        try:
+            parsed = urlsplit(value)
+            _ = parsed.port
+        except ValueError as exc:
+            raise HTTPException(400, f"{label} ไม่ใช่ URL ที่ถูกต้อง") from exc
+        if (parsed.scheme.lower() not in ("http", "https") or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.fragment):
+            raise HTTPException(400, f"{label} ต้องเป็น URL http(s) ที่ถูกต้อง")
+    if req.lfi_url and "FUZZ" not in req.lfi_url:
+        raise HTTPException(400, "lfi_url ต้องมี placeholder FUZZ")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in req.operator):
+        raise HTTPException(400, "operator ห้ามมีอักขระควบคุมหรือขึ้นบรรทัดใหม่")
+    if not chain_runner.rce_verify_available():
+        raise HTTPException(503, "security-audit-toolkit run_rce_verify ไม่พร้อมใช้งาน")
+
+    run_id = uuid.uuid4().hex
+    evidence_dir = os.path.join(settings.data_dir, "rce-verify", run_id)
+    result = await chain_runner.run_rce_verify_target(
+        req.target_url, settings, evidence_dir=evidence_dir, operator=req.operator,
+        lfi_url=req.lfi_url, session_endpoint=req.session_endpoint,
+        timeout=req.timeout, no_verify_ssl=req.no_verify_ssl,
+    )
+    result["target"] = req.target_url
+    if result.get("evidence_dir"):
+        try:
+            data_root = Path(settings.data_dir).resolve()
+            evidence_path = Path(result["evidence_dir"]).resolve()
+            if evidence_path != Path(evidence_dir).resolve() or not evidence_path.is_relative_to(data_root):
+                raise ValueError("evidence path escaped its run directory")
+            result["evidence_dir"] = os.path.relpath(evidence_path, data_root)
+        except (OSError, TypeError, ValueError):
+            result["evidence_dir"] = None
+            result["error"] = "toolkit returned an invalid evidence path"
+            result["verdict"] = "ERROR"
+    if result.get("verdict") == "BUSY":
+        raise HTTPException(429, result.get("error", "RCE Verify is busy"))
+    host = urlsplit(req.target_url).hostname or ""
+    store.audit.record("rce_verify", target=host, verdict=result.get("verdict"),
+                       operator=req.operator, ssl_verify=not req.no_verify_ssl)
+    return result
 
 
 @app.post("/api/scans/{job_id}/cancel")

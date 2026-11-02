@@ -5,7 +5,8 @@
 เป็นภาษาไทยว่าเครื่องไหนต้องแก้ก่อนและแก้อย่างไร โดยเน้นช่องโหว่ **PHP2Shell**
 (`CVE-2026-109618`, `CVE-2026-109619` · CVSS 9.2 · แก้แล้วใน PHP 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35)
 
-- **ไม่ทำลายระบบ** — TCP connect + ขอหน้าเว็บตามปกติ อ่าน header ไม่ส่งโค้ดโจมตี
+- **โหมดสแกนปกติไม่ส่งโค้ดโจมตี** — TCP connect + ขอหน้าเว็บตามปกติ อ่าน header
+- **RCE Verify เป็นโหมด active แยกต่างหาก** — ปิดเป็นค่าเริ่มต้น, ต้องใช้ token และยืนยันทุกครั้ง; เมื่อเปิดจะส่ง proof payload คงที่ซึ่งเรียก `id` บนเป้าหมาย
 - **ผลบวกลวงต่ำ** — ตัดเครื่องที่ไม่มีอยู่จริงที่ proxy/firewall ตอบแทนออก (ดู [การกรองผลปลอม](#การกรองผลปลอม-middlebox))
 - **ใช้ได้แม้ไม่มีอินเทอร์เน็ต** — UI, ฟอนต์, ไอคอน อยู่ในโปรเจกต์ทั้งหมด ไม่โหลดอะไรจากภายนอก
 
@@ -78,6 +79,40 @@ Chain ใช้กติกา scope เดียวกับระบบหล�
 ตัวเรียก toolkit ผูก DNS กับ IP ที่ระบบ resolve ไว้ และปฏิเสธ redirect/การเชื่อมต่อไปยังโฮสต์อื่น ไฟล์ pipeline รายงานและหลักฐานจะเก็บใน `data/chain/<job-id>/` และเปิดดาวน์โหลดจากการ์ดผล chain ได้ การกดยกเลิกหรือหมดเวลาจะหยุด subprocess ทั้งชุด
 
 นอก Docker Compose โหมดนี้ปิดเป็นค่าเริ่มต้น ให้ผู้ดูแลเปิดด้วย `THSCAN_ENABLE_RCE_CHAIN=1`
+
+### RCE Verify API (active)
+
+การตรวจนี้เรียก `run_rce_verify` ของ Security Audit Toolkit โดยตรง และรองรับ URL เต็ม, LFI URL ที่มี `FUZZ`,
+session endpoint, timeout ต่อ request, การปิดตรวจ certificate สำหรับกรณีจำเป็น และ operator metadata
+ถ้าไม่ส่ง LFI/session endpoint toolkit จะ autodetect ตามพฤติกรรมต้นทาง ผลหลักฐานถูกแยกตาม run
+
+เปิด API โดยตั้ง `THSCAN_RCE_VERIFY_ENABLED=1` และ `THSCAN_RCE_VERIFY_TOKEN` เป็น random secret
+อย่างน้อย 32 ตัวอักษร (ส่งด้วย `Authorization: Bearer …`; ห้ามฝัง token ใน frontend หรือ commit ลง Git)
+ทุกคำขอต้องส่ง `confirm: true` และ `target_url` เป็น HTTP(S) URL การเรียกเป็น standalone ไม่ต้องผูกกับ
+scan job และรับ public target ได้ โดย API ส่ง ownership override ของ toolkit หลังผ่าน Bearer authentication
+และการยืนยันของ operator เนื่องจาก API ไม่สามารถพิสูจน์กรรมสิทธิ์ทางเทคนิคได้ จึงควรจำกัด token/route
+ไว้กับผู้ใช้ที่ได้รับอนุญาต; เชื่อมกับระบบ login ของหน่วยงานเมื่อพร้อมใช้งาน
+
+ตัวอย่าง body สำหรับตรวจ URL:
+
+```json
+{
+  "target_url": "https://agency.example.gov/portal",
+  "lfi_url": "https://agency.example.gov/index.php?page=FUZZ",
+  "session_endpoint": "https://agency.example.gov/upload.php",
+  "timeout": 10,
+  "no_verify_ssl": false,
+  "operator": "agency-cert",
+  "confirm": true
+}
+```
+
+ถ้าจะ autodetect ให้ละ `lfi_url` และ `session_endpoint` ออก หาก certificate เป็น self-signed ให้ตั้ง
+`no_verify_ssl: true` อย่างมีเหตุผล LFI/session endpoints อาจระบุแยกได้เหมือน toolkit ต้นทาง และ redirect
+ใช้พฤติกรรมปกติของ HTTP session ใน toolkit โดยไม่มี scan-job host/port allowlist เพิ่มเติม
+แอปยังบังคับ wall-clock deadline (`THSCAN_RCE_VERIFY_TOTAL_TIMEOUT`) และจำกัด active verify ที่กำลัง
+ทำงานพร้อมกันไว้หนึ่งงาน โหมดนี้เป็น active check: proof payload คงที่ของ toolkit อาจเรียก `id` บน
+เป้าหมาย และไม่รับคำสั่ง shell จากผู้เรียก API
 
 ### ตรวจพอร์ต
 
@@ -152,6 +187,9 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 | `THSCAN_POLITE_DELAY_MS` | `0` | หน่วงต่อ host (ms) |
 | `THSCAN_ENABLE_RCE_CHAIN` | `0` | เปิดโหมด Security Audit Toolkit chain (ปิดเป็นค่าเริ่มต้น) |
 | `THSCAN_RCE_CHAIN_TIMEOUT_S` | `240` | เวลาสูงสุดของ subprocess toolkit (วินาที) |
+| `THSCAN_RCE_VERIFY_ENABLED` | `0` | เปิด API สำหรับ active RCE Verify โดยชัดแจ้ง |
+| `THSCAN_RCE_VERIFY_TOKEN` | *(ไม่มี)* | Bearer secret แบบ random อย่างน้อย 32 ตัวอักษร |
+| `THSCAN_RCE_VERIFY_TOTAL_TIMEOUT` | `180` | wall-clock deadline ของ RCE Verify subprocess (วินาที) |
 | `THSCAN_MAX_PORT_PROBES` | `2000000` | ขีดจำกัด (ที่อยู่ × พอร์ต) ต่อการสแกน |
 | `THSCAN_MAX_SOCKETS` | *(คำนวณอัตโนมัติ)* | การเชื่อมต่อพร้อมกันทั้งโปรแกรม |
 | `THSCAN_GOV_SUFFIXES` | `go.th,or.th,mi.th,ac.th,in.th` | โดเมนที่ถือว่าเป็นของหน่วยงาน (ใช้กับโหมดลิงก์) |
@@ -170,6 +208,7 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 | `GET` | `/api/resolve?q=` | ตรวจลิงก์ล่วงหน้า: IP, โดเมนหน่วยงาน, อยู่ในขอบเขตไหม |
 | `GET` / `DELETE` | `/api/scans` | รายการประวัติ / ล้างประวัติ |
 | `GET` | `/api/scans/{id}` · `/summary` | ผลเต็ม / สรุปสำหรับ poll |
+| `POST` | `/api/rce-verify` | standalone active verify; Bearer token + `confirm: true`, รับ `target_url`, optional `lfi_url`/`session_endpoint`, `timeout`, `no_verify_ssl`, `operator` |
 | `POST` | `/api/scans/{id}/cancel` | ยกเลิก |
 | `POST` | `/api/scans/{id}/devices/{ip}/recheck` | ตรวจซ้ำเครื่องเดียว (จำลองเฉพาะงานตัวอย่าง) |
 | `GET` | `/api/scans/{id}/export.csv` · `/export.json` | ส่งออก |
@@ -209,7 +248,8 @@ app/
     vuln_rules.py    กฎ PHP2Shell / EOL / header
     demo_scenarios.py ข้อมูลตัวอย่าง (มีป้ายกำกับเสมอ)
     engine.py        orchestration
-    chain_runner.py  isolated toolkit subprocess, timeout, pinned host guard
+    chain_runner.py  toolkit adapters, including guarded active RCE Verify
+    rce_verify.py   async adapter for the toolkit's active verifier
 static/              UI (HTML/CSS/JS ล้วน, ฟอนต์ Inter + Anuphan · OFL)
 tests/
 ```

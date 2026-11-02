@@ -87,6 +87,11 @@ class Settings:
     traceroute_max: int = _env_int("THSCAN_TRACEROUTE_MAX", 16)
     rce_chain_enabled: bool = _env_bool("THSCAN_RCE_CHAIN_ENABLED", True)
     rce_chain_timeout_s: int = _env_int("THSCAN_RCE_CHAIN_TIMEOUT", 90)
+    rce_verify_enabled: bool = _env_bool("THSCAN_RCE_VERIFY_ENABLED", False)
+    rce_verify_total_timeout_s: int = _env_int("THSCAN_RCE_VERIFY_TOTAL_TIMEOUT", 180)
+    rce_verify_token: str = field(
+        default_factory=lambda: os.environ.get("THSCAN_RCE_VERIFY_TOKEN", "")
+    )
     data_dir: str = field(default_factory=_default_data_dir)
 
     def allowed_networks(self) -> List[ipaddress.IPv4Network]:
