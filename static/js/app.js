@@ -64,7 +64,7 @@ const SEV = {
 };
 const sevBadge = (s) => `<span class="badge ${SEV[s].cls}">${ic(SEV[s].icon, 13, 2.6)}${SEV[s].word}</span>`;
 const CONF = { confirmed: "ยืนยันแล้ว", high: "สูง", medium: "ปานกลาง", low: "ต่ำ" };
-const DEVTYPE = { "Gateway Router": "เราเตอร์ / เกตเวย์", "Web Server (HTTPS)": "เว็บเซิร์ฟเวอร์ (HTTPS)", "Web Server (HTTP)": "เว็บเซิร์ฟเวอร์ (HTTP)", "LAN Device": "อุปกรณ์ในเครือข่าย" };
+const DEVTYPE = { "Gateway Router": "อาจเป็นเกตเวย์ (ผลเดิม: เดาจาก IP)", "Web Server (HTTPS)": "พบเว็บเซอร์วิส (HTTPS)", "Web Server (HTTP)": "พบเว็บเซอร์วิส (HTTP)", "LAN Device (other services)": "พบอุปกรณ์เครือข่าย (มีบริการอื่น)", "LAN Device": "อุปกรณ์เครือข่าย (ยังไม่ทราบชนิด)" };
 const devType = (t) => DEVTYPE[t] || t || "—";
 const STATE = { queued: "รอคิว", running: "กำลังสแกน", completed: "เสร็จแล้ว", cancelled: "ยกเลิกแล้ว", failed: "ผิดพลาด" };
 const DOW = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
@@ -1280,7 +1280,7 @@ function paintTabs() {
       : `<p class="muted" style="font-size:14px">ไม่พบพอร์ตที่เปิด${(R.job.scanned_ports || []).length ? ` จาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ` : ""}</p>`;
   } else {
     const kv = [["IP", d.ip, ""], ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
-      ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นเฉพาะเครื่องในวง LAN เดียวกับเครื่องที่รัน thscan"], ["ประเภท", devType(d.device_type), "คาดเดาจากบริการที่เปิดอยู่ อาจไม่แม่นยำ 100%"],
+      ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นได้จากตาราง ARP ใน LAN เดียวกันเท่านั้น; หากผ่าน router อาจเป็น MAC ของ next hop และ OUI ไม่ยืนยันชนิดหรือรุ่นอุปกรณ์"], ["บทบาท/ชนิด", devType(d.device_type), "เป็นเพียงบทบาทบริการที่สังเกตได้ ไม่ยืนยันฮาร์ดแวร์หรือ OS; IP ลงท้าย .1/.254 เพียงอย่างเดียวไม่เพียงพอจะสรุปว่าเป็น router และไม่สามารถระบุ MacBook/PC/iPhone จาก IP อย่างเดียวได้"],
       ["Runtime", runtimeOf(d) || "—", "ซอฟต์แวร์ที่ให้บริการเว็บ เช่น PHP, Node.js/Express หรือเว็บเซิร์ฟเวอร์ (nginx/Apache)"], ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
       ["CMS", d.cms || "—", ""], ["พอร์ตเว็บ", d.open_ports.join(", ") || "—", "พอร์ตที่ตอบกลับเป็นเว็บจริงระหว่างการสแกน"],
       ["เวลาตอบสนอง", d.latency_ms != null ? `${num(d.latency_ms)} ms` : "—", "เวลาที่เครื่องใช้ตอบกลับ ยิ่งน้อยยิ่งเร็ว"]];

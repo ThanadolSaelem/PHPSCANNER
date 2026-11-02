@@ -514,3 +514,67 @@ def test_default_stream_covers_all_endpoints_with_bounded_backpressure(tmp_path)
         assert stream.queue.qsize() == stream.queue.maxsize
 
     asyncio.run(scenario())
+
+
+def test_stream_uses_free_worker_for_later_endpoint_before_first_finishes(monkeypatch, tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.config import Settings
+    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
+    from app.scanner import engine as eng
+
+    scan_active = False
+    active = 0
+    peak_active = 0
+    overlapped_during_scan = False
+
+    async def fake_scan(_engine, scan_job, cancel, on_web_endpoint=None):
+        nonlocal scan_active
+        scan_active = True
+        scan_job.progress.phase = "inspect"
+        first = WebEndpoint(ip="192.0.2.51", hostname="site.example", port=80, scheme="http")
+        second = WebEndpoint(ip="192.0.2.51", hostname="site.example", port=443, scheme="https")
+        scan_job.devices = [Device(ip="192.0.2.51", open_ports=[80, 443], web_endpoints=[first, second])]
+        await on_web_endpoint(first)
+        await asyncio.sleep(0.02)
+        await on_web_endpoint(second)
+        await asyncio.sleep(0.03)
+        scan_active = False
+
+    async def fake_verify(target, settings, **kwargs):
+        nonlocal active, peak_active, overlapped_during_scan
+        active += 1
+        peak_active = max(peak_active, active)
+        if active >= 2 and scan_active:
+            overlapped_during_scan = True
+        await asyncio.sleep(0.12)
+        active -= 1
+        return {
+            "ran": True, "target": target, "verdict": "NOT_CONFIRMED",
+            "summary": {}, "evidence_dir": kwargs["evidence_dir"],
+            "evidence_files": [],
+        }
+
+    settings = Settings()
+    settings.data_dir = str(tmp_path)
+    settings.rce_verify_max_workers = 2
+    settings.rce_verify_memory_reserve_mb = 256
+    settings.rce_verify_worker_memory_mb = 128
+    job = ScanJob(
+        id="overlap", created_at=datetime.now(timezone.utc),
+        request=ScanRequest(
+            targets=["192.0.2.51"], scan_mode="fast",
+            rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True),
+        ),
+    )
+    monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
+    monkeypatch.setattr(eng.rce_batch, "available_memory_bytes", lambda: 2 * 1024**3)
+    monkeypatch.setattr(eng.chain_runner, "run_rce_verify_target", fake_verify)
+
+    asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
+
+    assert job.state.value == "completed", job.error
+    assert peak_active == 2
+    assert overlapped_during_scan is True
+    assert job.rce_verify_result["completed_targets"] == 2

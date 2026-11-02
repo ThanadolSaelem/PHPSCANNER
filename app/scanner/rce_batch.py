@@ -228,11 +228,48 @@ class RceVerifyBatchStream:
         return result
 
     async def run(self) -> None:
-        """Consume discoveries in adaptive waves while the scanner keeps probing."""
-        sentinel_seen = False
+        """Consume discoveries with an adaptive, work-conserving worker pool."""
+        active: Dict[asyncio.Task, Dict[str, Any]] = {}
         pending: Optional[Dict[str, Any]] = None
+        get_task: Optional[asyncio.Task] = None
+        sentinel_seen = False
+
+        def accept(item: Optional[Dict[str, Any]]) -> None:
+            nonlocal pending, sentinel_seen
+            if item is _QUEUE_END:
+                sentinel_seen = True
+                return
+            pending = item
+            if self.deadline is None:
+                self.deadline = time.monotonic() + self.batch_timeout_s
+
+        async def collect(done: Set[asyncio.Task]) -> None:
+            completed_rows: List[Dict[str, Any]] = []
+            for task in done:
+                endpoint = active.pop(task, None)
+                if endpoint is None:
+                    continue
+                row = task.result()
+                completed_rows.append(row)
+            if not completed_rows:
+                return
+            self.rows.extend(completed_rows)
+            peak_rss = max(
+                (int(row.get("peak_rss_bytes") or 0) for row in completed_rows),
+                default=0,
+            )
+            if peak_rss:
+                self.estimated_worker_mb = max(
+                    self.estimated_worker_mb,
+                    min(4096, int((peak_rss * 1.5) / (1024 * 1024)) + 1),
+                )
+            self.job.progress.rce_verify_completed = len(self.rows)
+            self.job.progress.rce_verify_active = len(active)
+            self.job.progress.rce_verify_batch_size = len(active)
+            self._publish("RUNNING")
+
         try:
-            while not sentinel_seen:
+            while not sentinel_seen or active or pending is not None:
                 if self.cancel.is_set() and self.stop_reason is None:
                     self.stop_reason = "CANCELLED_NOT_STARTED"
                 if self.deadline is not None and time.monotonic() >= self.deadline:
@@ -243,40 +280,101 @@ class RceVerifyBatchStream:
                     if pending is not None:
                         self._record_deferred(pending, self.stop_reason)
                         pending = None
-                    item = await self.queue.get()
-                    if item is _QUEUE_END:
-                        sentinel_seen = True
-                    else:
-                        self._record_deferred(item, self.stop_reason)
+                    if get_task is None and not sentinel_seen:
+                        get_task = asyncio.create_task(self.queue.get())
+                    wait_set = set(active)
+                    if get_task is not None:
+                        wait_set.add(get_task)
+                    if not wait_set:
+                        break
+                    done, _ = await asyncio.wait(
+                        wait_set, timeout=0.2, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    await collect(done)
+                    if get_task is not None and get_task in done:
+                        item = get_task.result()
+                        get_task = None
+                        if item is _QUEUE_END:
+                            sentinel_seen = True
+                        else:
+                            self._record_deferred(item, self.stop_reason)
                     continue
 
                 if pending is None:
-                    wait_s = 0.25 if self.deadline is not None else None
-                    try:
-                        item = await asyncio.wait_for(self.queue.get(), wait_s) if wait_s else await self.queue.get()
-                    except asyncio.TimeoutError:
-                        continue
-                    if item is _QUEUE_END:
-                        sentinel_seen = True
-                        continue
-                    pending = item
-                    if self.deadline is None:
-                        self.deadline = time.monotonic() + self.batch_timeout_s
+                    if get_task is not None:
+                        if get_task.done():
+                            item = get_task.result()
+                            get_task = None
+                            accept(item)
+                            if sentinel_seen:
+                                continue
+                        else:
+                            wait_set = set(active)
+                            wait_set.add(get_task)
+                            done, _ = await asyncio.wait(
+                                wait_set, timeout=0.2,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            await collect(done)
+                            if get_task in done:
+                                item = get_task.result()
+                                get_task = None
+                                accept(item)
+                            continue
+                    else:
+                        try:
+                            item = self.queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            if not sentinel_seen:
+                                get_task = asyncio.create_task(self.queue.get())
+                            elif active:
+                                done, _ = await asyncio.wait(
+                                    set(active), timeout=0.2,
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                                await collect(done)
+                            continue
+                        accept(item)
+                        if sentinel_seen:
+                            continue
 
-                capacity = choose_batch_size(
-                    self.max_workers,
-                    available_bytes=available_memory_bytes(),
-                    max_workers=self.max_workers,
-                    reserve_mb=self.reserve_mb,
-                    worker_memory_mb=self.estimated_worker_mb,
-                )
+                if pending is None:
+                    continue
+
+                free_slots = self.max_workers - len(active)
+                if free_slots <= 0:
+                    done, _ = await asyncio.wait(
+                        set(active), timeout=0.2,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    await collect(done)
+                    continue
+
+                available = available_memory_bytes()
+                if available is None:
+                    capacity = 1 if not active else 0
+                else:
+                    capacity = choose_batch_size(
+                        free_slots,
+                        available_bytes=available,
+                        max_workers=free_slots,
+                        reserve_mb=self.reserve_mb,
+                        worker_memory_mb=self.estimated_worker_mb,
+                    )
                 if capacity <= 0:
-                    self.stop_reason = "DEFERRED_RESOURCE_LIMIT"
+                    if active:
+                        done, _ = await asyncio.wait(
+                            set(active), timeout=0.2,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        await collect(done)
+                    else:
+                        self.stop_reason = "DEFERRED_RESOURCE_LIMIT"
                     continue
 
                 batch = [pending]
                 pending = None
-                while len(batch) < capacity and not sentinel_seen:
+                while len(batch) < capacity:
                     try:
                         item = self.queue.get_nowait()
                     except asyncio.QueueEmpty:
@@ -287,25 +385,34 @@ class RceVerifyBatchStream:
                     batch.append(item)
 
                 self.batch_count += 1
-                self.max_parallel = max(self.max_parallel, len(batch))
-                self.job.progress.rce_verify_active = len(batch)
-                self.job.progress.rce_verify_batch_size = len(batch)
-                completed = await asyncio.gather(*(self._verify_one(item) for item in batch))
-                self.rows.extend(completed)
-                peak_rss = max((int(row.get("peak_rss_bytes") or 0) for row in completed), default=0)
-                if peak_rss:
-                    self.estimated_worker_mb = max(
-                        self.estimated_worker_mb,
-                        min(4096, int((peak_rss * 1.5) / (1024 * 1024)) + 1),
-                    )
-                self.job.progress.rce_verify_completed = len(self.rows)
-                self.job.progress.rce_verify_active = 0
-                self.job.progress.rce_verify_batch_size = 0
-                self._publish("RUNNING")
+                for endpoint in batch:
+                    task = asyncio.create_task(self._verify_one(endpoint))
+                    active[task] = endpoint
+                self.max_parallel = max(self.max_parallel, len(active))
+                self.job.progress.rce_verify_active = len(active)
+                self.job.progress.rce_verify_batch_size = len(active)
         except asyncio.CancelledError:
             self.stop_reason = "CANCELLED_NOT_STARTED"
+            if pending is not None:
+                self._record_deferred(pending, self.stop_reason)
+                pending = None
+            while not self.queue.empty():
+                item = self.queue.get_nowait()
+                if item is not _QUEUE_END:
+                    self._record_deferred(item, self.stop_reason)
+            for task in active:
+                task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
+            active.clear()
             raise
         finally:
+            if get_task is not None:
+                get_task.cancel()
+                await asyncio.gather(get_task, return_exceptions=True)
+            for task in active:
+                task.cancel()
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
             self.job.progress.rce_verify_active = 0
             self.job.progress.rce_verify_batch_size = 0
             self.job.progress.rce_verify_completed = len(self.rows)

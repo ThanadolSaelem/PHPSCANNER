@@ -119,14 +119,12 @@ def _arp_command_table() -> Dict[str, str]:
 def infer_device_type(
     ip: str, open_web_ports: List[int], has_tls: bool, has_other_open: bool
 ) -> str:
-    try:
-        last = int(ip.rsplit(".", 1)[1])
-    except (ValueError, IndexError):
-        last = -1
-    if last in (1, 254):
-        return "Gateway Router"
+    # IP suffixes (.1/.254) do not prove that a host is a gateway/router.
+    # Report only the service role supported by the current scan evidence.
     if open_web_ports:
         return "Web Server (HTTPS)" if has_tls else "Web Server (HTTP)"
+    if has_other_open:
+        return "LAN Device (other services)"
     return "LAN Device"
 
 

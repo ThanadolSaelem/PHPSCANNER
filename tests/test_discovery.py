@@ -5,11 +5,11 @@ from app.scanner.ip_utils import out_of_scope, label_targets
 
 
 def test_infer_device_type():
-    assert discovery.infer_device_type("192.168.1.1", [], False, False) == "Gateway Router"
-    assert discovery.infer_device_type("192.168.1.254", [], False, False) == "Gateway Router"
+    assert discovery.infer_device_type("192.168.1.1", [], False, False) == "LAN Device"
+    assert discovery.infer_device_type("203.0.113.254", [], False, False) == "LAN Device"
     assert discovery.infer_device_type("192.168.1.20", [443], True, False) == "Web Server (HTTPS)"
     assert discovery.infer_device_type("192.168.1.21", [80], False, False) == "Web Server (HTTP)"
-    assert discovery.infer_device_type("192.168.1.50", [], False, True) == "LAN Device"
+    assert discovery.infer_device_type("192.168.1.50", [], False, True) == "LAN Device (other services)"
 
 
 def test_autodetect_returns_list():

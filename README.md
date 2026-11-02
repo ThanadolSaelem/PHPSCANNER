@@ -89,7 +89,9 @@ Chain ใช้กติกา scope เดียวกับระบบหล�
 
 ในหน้าเว็บ ให้เปิด **ขั้นสูง → โหมดรวดเร็ว** แล้วเลือก **ยืนยันใช้ RCE Verify แบบ active ระหว่าง fast scan**; popup เป็นจุดยืนยันและกรอก Bearer token เพียงครั้งเดียว ก่อนเริ่ม scan job เดียว ทันทีที่ HTTP probe ยืนยัน endpoint แรก ระบบจะส่ง endpoint นั้นเข้า RCE Verify ระหว่างที่ fast scan ยังตรวจเครื่องอื่นต่อ และส่ง endpoint ที่ยืนยันเพิ่มเข้าคิวต่อเนื่อง ทั้ง scheme, hostname, IP และ port ถูกเก็บจาก probe จริงและใช้สร้างรายการเป้าหมาย
 
-batch ปรับจำนวน worker ก่อนเริ่มแต่ละ wave จากหน่วยความจำที่ว่าง (รวม cgroup limit เมื่อมี), ใช้ค่า RSS สูงสุดที่วัดได้จาก worker เพื่อเพิ่มประมาณการหน่วยความจำของ wave ถัดไป และมีเพดาน concurrency รวมต่อ process สูงสุด 8 (ค่าเริ่มต้น 2) หากไม่มี memory telemetry จะทำงานทีละ endpoint; หากหน่วยความจำเหลือน้อยเกิน reserve จะไม่เริ่ม wave ถัดไป แต่แสดง endpoint ที่ยังไม่เริ่มอย่างชัดเจน ค่าเริ่มต้นตรวจทุก endpoint ที่ fast scan ยืนยัน โดยใช้คิว bounded และ backpressure เพื่อไม่สะสมงานใน RAM; เพดาน endpoint เป็นตัวเลือกสำหรับผู้ดูแล (`0` = ไม่จำกัด) หากตั้งเพดานและพบจำนวนเกิน ระบบจะไม่ส่ง endpoint ที่เกินเข้า active queue และรายงานผล `PARTIAL_ENDPOINT_LIMIT` พร้อมจำนวนที่ไม่ได้เริ่มตรวจ ส่วน batch ที่เริ่มไปแล้วจะปล่อยให้จบ ไม่มีการสุ่มหรือซ่อนรายการที่ไม่ได้ตรวจ
+worker pool จะรับ endpoint ที่ยืนยันแล้วทันที ใช้ slot ว่างต่อโดยไม่รอให้ target ที่ช้ากว่าใน wave ก่อนจบ และปรับ concurrency จากหน่วยความจำที่ว่าง (รวม cgroup limit เมื่อมี) กับ RSS สูงสุดที่วัดได้ มีเพดาน concurrency รวมต่อ process สูงสุด 8 (ค่าเริ่มต้น 2); หากไม่มี memory telemetry จะทำงานทีละ endpoint และเมื่อหน่วยความจำเหลือน้อยกว่าค่า reserve จะไม่เริ่มงานใหม่จนกว่าจะมีทรัพยากรหรือถึง deadline ค่าเริ่มต้นตรวจทุก endpoint ที่ fast scan ยืนยัน โดยใช้ bounded queue และ backpressure เพื่อไม่สะสมงานใน RAM; เพดาน endpoint เป็นตัวเลือกสำหรับผู้ดูแล (`0` = ไม่จำกัด) หากตั้งเพดานและพบจำนวนเกิน ระบบจะไม่ส่ง endpoint ที่เกินเข้า active queue และรายงานผล `PARTIAL_ENDPOINT_LIMIT` พร้อมจำนวนที่ไม่ได้เริ่มตรวจ ไม่มีการสุ่มหรือซ่อนรายการที่ไม่ได้ตรวจ
+
+ช่อง **Timeout ต่อ request** ใน popup ใช้กับ HTTP แต่ละครั้งของ toolkit (1–60 วินาที; เริ่มต้น 10) จึงลอง 20–30 วินาทีกับเว็บที่ตอบช้าได้ ส่วน `THSCAN_RCE_VERIFY_TOTAL_TIMEOUT` เป็น wall-clock limit ต่อ endpoint ของ child process (ค่าเริ่มต้น 180 วินาที) และ `THSCAN_RCE_VERIFY_BATCH_TIMEOUT` เป็น deadline รวมของ batch; เพิ่มแยกกันเมื่อมีหลักฐานว่า timeout เป็นสาเหตุ อย่าเพิ่มจนกลบปัญหา 5xx, TLS หรือ redirect ที่อยู่นอก origin ซึ่งยังคงถูกบล็อกตาม scope
 
 เพื่อคง scope ตามผล fast scan batch จะ pin DNS ของ hostname ไปยัง IP ที่ probe ยืนยัน, ยอมให้ request/redirect อยู่ใน origin เดิม (scheme + host + port) เท่านั้น และไม่รับ custom LFI/session URL ในโหมด batch หากมี HTTP→HTTPS หรือเปลี่ยน port ระบบจะไม่ตาม redirect ข้าม origin; endpoint HTTPS/port นั้นจะถูกตรวจแยกเมื่อ fast scan ยืนยันว่ามีอยู่ การปิด popup จะยกเลิกการเลือก RCE และไม่มีปุ่มปลดล็อกหรือแบบฟอร์มยืนยันซ้ำในหน้าผลการสแกน
 
@@ -167,6 +169,8 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 
 > **MAC** อ่านจาก ARP table (Linux: `/proc/net/arp`, Windows/macOS: `arp -a`) จึงเห็นเฉพาะเครื่องใน
 > วงเดียวกับเครื่องที่รัน thscan ข้ามเราเตอร์จะว่าง — เป็นเรื่องปกติ ไม่ต้องใช้สิทธิ์ root
+>
+> **ประเภทอุปกรณ์** ในผล fast scan เป็นบทบาทบริการที่สังเกตได้ เช่น พบเว็บเซอร์วิส HTTP/HTTPS ไม่ใช่การยืนยันชนิดฮาร์ดแวร์หรือ OS; IP ลงท้าย `.1`/`.254` ไม่เพียงพอจะสรุปว่าเป็น router ระบบจึงไม่ใช้ suffix นี้ฟันธงอีกต่อไป การระบุว่าเป็น MacBook, PC หรือ iPhone ต้องมีหลักฐานเฉพาะจากเครือข่าย LAN/agent/CMDB และควรแสดงพร้อมแหล่งที่มาและระดับความเชื่อมั่น ไม่ควรเดาจาก IP, OUI หรือ web banner เพียงอย่างเดียว
 
 ---
 

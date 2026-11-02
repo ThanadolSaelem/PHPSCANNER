@@ -67,7 +67,7 @@ async def get_config() -> dict:
         "nmap_available": nmap_scan.nmap_available(),
         "chain_available": chain_runner.available(),
         "rce_verify_enabled": settings.rce_verify_enabled,
-        "rce_verify_max_endpoints": max(1, min(1000, settings.rce_verify_max_endpoints)),
+        "rce_verify_max_endpoints": max(0, min(100000, settings.rce_verify_max_endpoints)),
         "rce_verify_max_workers": max(1, min(8, settings.rce_verify_max_workers)),
         "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),

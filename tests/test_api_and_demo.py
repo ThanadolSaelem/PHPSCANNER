@@ -106,12 +106,18 @@ def test_csv_cell_neutralises_formulas():
 def test_app_lifespan_starts_and_stops_scheduler():
     from fastapi.testclient import TestClient
 
-    from app.main import app, scheduler
+    from app.main import app, scheduler, settings
 
-    with TestClient(app) as client:
-        assert client.get("/healthz").status_code == 200
-        assert scheduler._task is not None and not scheduler._task.done()
-    assert scheduler._task is None
+    previous_cap = settings.rce_verify_max_endpoints
+    settings.rce_verify_max_endpoints = 0
+    try:
+        with TestClient(app) as client:
+            assert client.get("/healthz").status_code == 200
+            assert client.get("/api/config").json()["rce_verify_max_endpoints"] == 0
+            assert scheduler._task is not None and not scheduler._task.done()
+        assert scheduler._task is None
+    finally:
+        settings.rce_verify_max_endpoints = previous_cap
 
 
 async def test_cancel_immediately_stops_in_flight_scan(monkeypatch, tmp_path):
