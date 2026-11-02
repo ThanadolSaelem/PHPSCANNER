@@ -128,6 +128,54 @@ def infer_device_type(
     return "LAN Device"
 
 
+def local_ipv4_interfaces() -> List[Dict[str, str]]:
+    """Return real private IPv4 interface networks, never route/fallback guesses.
+
+    Used only as a fail-closed boundary for opt-in LAN fingerprinting. The
+    regular autodetect_subnets() helper is a UI hint and intentionally has a
+    synthetic fallback, so it must not be used for authorization.
+    """
+    private_networks = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+    )
+    try:
+        import psutil
+
+        all_addrs = psutil.net_if_addrs()
+        interface_stats = psutil.net_if_stats()
+    except Exception:  # unavailable telemetry must fail closed
+        return []
+
+    found: List[Dict[str, str]] = []
+    seen: set[Tuple[str, str, str]] = set()
+    for ifname, addresses in all_addrs.items():
+        stats = interface_stats.get(ifname)
+        if stats is None or not stats.isup:
+            continue
+        for item in addresses:
+            if item.family != socket.AF_INET or not item.netmask:
+                continue
+            try:
+                addr = ipaddress.IPv4Address(item.address)
+                network = ipaddress.IPv4Network(f"{item.address}/{item.netmask}", strict=False)
+            except ipaddress.AddressValueError:
+                continue
+            except (ipaddress.NetmaskValueError, ValueError):
+                continue
+            if (addr.is_loopback or addr.is_link_local or addr.is_multicast
+                    or addr.is_unspecified or network.prefixlen == 32
+                    or not any(addr in private for private in private_networks)):
+                continue
+            key = (str(ifname), str(addr), str(network))
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({"name": str(ifname)[:64], "address": str(addr), "cidr": str(network)})
+    return sorted(found, key=lambda x: (x["name"], x["cidr"], x["address"]))
+
+
 def autodetect_subnets() -> List[Dict[str, str]]:
     subnets: List[Dict[str, str]] = []
     seen: set[str] = set()

@@ -161,6 +161,16 @@ worker pool จะรับ endpoint ที่ยืนยันแล้วท�
 
 เมื่อเลือก RCE Verify ในหน้าเว็บ แบบฟอร์มและการยืนยัน active จะแสดงก่อนเริ่ม จากนั้นคำขอเดียวสร้าง fast-scan job; ระหว่าง fast scan เมื่อ probe ยืนยัน URL/พอร์ต ระบบจะส่ง endpoint เข้า RCE Verify ทันทีเป็น batch โดยไม่รอให้การตรวจ passive ทั้งหมดเสร็จและไม่เริ่ม fast scan ซ้ำ Bearer token ส่งผ่าน `Authorization` header และไม่ถูกเก็บใน job
 
+### LAN fingerprinting (เลือกใช้แยกจาก fast scan ปกติ)
+
+ผู้ดูแลเปิดความสามารถนี้ด้วย `THSCAN_LAN_FINGERPRINT_ENABLED=1` ก่อน ผู้ใช้ต้องเลือก **ระบุชนิดอุปกรณ์ใน LAN** และยืนยัน consent ใหม่ในหน้าต่างก่อนส่งงาน ใช้ได้เฉพาะ fast scan ที่ระบุ IP/CIDR โดยตรง ทุก IP ต้องเป็น RFC1918 และอยู่บน subnet ของ interface ที่กำลัง up; ก่อนส่ง probe ระบบตรวจ longest-prefix route จากตารางของ OS ว่าเป็น direct/on-link ไม่มี gateway และตรวจว่า kernel จะเลือก source address ของ interface เดียวกัน เว็บไซต์/DNS, public IP, routed target, interface/route ที่กำกวม และงานเกินเพดานจะถูกปฏิเสธก่อน probe ค่าเริ่มต้นจำกัด 256 IP ต่อ job
+
+หลัง fast scan จบ ระบบส่ง NetBIOS node-status แบบ unicast หนึ่งครั้งต่ออุปกรณ์ที่ fast scan ยืนยันแล้ว โดยจำกัด concurrency และ timeout; LAN fingerprint ทำงานพร้อมกับ RCE batch ที่อาจยังตรวจ endpoint อื่นอยู่ ไม่มีการใช้ Nmap OS/raw-socket scan, ไม่เพิ่ม privilege ให้ Docker, ไม่เรียก URL จากข้อมูลที่ตอบกลับ และ fingerprint จะไม่เปลี่ยน severity หรือคะแนนช่องโหว่ ชนิด เช่น router, workstation, MacBook หรือ iPhone เป็นเพียง hint พร้อม confidence/source/evidence; ตัวอย่างเช่น AirPlay อย่างเดียวระบุได้เพียง Apple ecosystem service ไม่ใช่หลักฐานยืนยันว่าเป็น iPhone/MacBook
+
+mDNS/SSDP เป็น checkbox แยกในหน้าต่าง consent เพราะ multicast request อาจมองเห็นได้โดยทุกอุปกรณ์ที่ฟังอยู่บน segment/interface ที่เลือก ไม่ใช่เฉพาะ IP เป้าหมาย ระบบกรองและเก็บผลเฉพาะ IP ที่อยู่ในรายการ fast scan และจะไม่ fetch `LOCATION` URL ของ SSDP response การปิด checkbox นี้เป็นค่าเริ่มต้น การ opt-in หรือ consent จะไม่ถูกนำไปใช้กับ rescan หรืองานตามเวลาโดยอัตโนมัติ
+
+ข้อควรทราบ: `docker-compose.yml` ของโครงการใช้ `network_mode: host` บน Linux อยู่แล้ว จึงตรวจ route/interface ของ host ได้; บน Docker Desktop (Windows/macOS) ใช้ `run.sh` หรือ `run.bat` ตามหมายเหตุใน Compose เพื่อให้เห็น interface ของเครื่องโดยตรง หาก OS/container มองเห็นเฉพาะ bridge หรือไม่มี route ที่พิสูจน์ว่า on-link ระบบจะปฏิเสธก่อนส่ง probe ฟีเจอร์นี้เองไม่เปลี่ยน network mode และไม่เพิ่ม Linux capabilities/raw-socket privilege
+
 ### การกรองผลปลอม (middlebox)
 
 บางเครือข่ายมี proxy หรือ firewall ที่รับการเชื่อมต่อแทนทุกที่อยู่ ทำให้ดูเหมือนมีเครื่องออนไลน์ทุก IP
@@ -170,7 +180,7 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 > **MAC** อ่านจาก ARP table (Linux: `/proc/net/arp`, Windows/macOS: `arp -a`) จึงเห็นเฉพาะเครื่องใน
 > วงเดียวกับเครื่องที่รัน thscan ข้ามเราเตอร์จะว่าง — เป็นเรื่องปกติ ไม่ต้องใช้สิทธิ์ root
 >
-> **ประเภทอุปกรณ์** ในผล fast scan เป็นบทบาทบริการที่สังเกตได้ เช่น พบเว็บเซอร์วิส HTTP/HTTPS ไม่ใช่การยืนยันชนิดฮาร์ดแวร์หรือ OS; IP ลงท้าย `.1`/`.254` ไม่เพียงพอจะสรุปว่าเป็น router ระบบจึงไม่ใช้ suffix นี้ฟันธงอีกต่อไป การระบุว่าเป็น MacBook, PC หรือ iPhone ต้องมีหลักฐานเฉพาะจากเครือข่าย LAN/agent/CMDB และควรแสดงพร้อมแหล่งที่มาและระดับความเชื่อมั่น ไม่ควรเดาจาก IP, OUI หรือ web banner เพียงอย่างเดียว
+> **ประเภทอุปกรณ์** ในผล fast scan ปกติเป็นบทบาทบริการที่สังเกตได้ เช่น พบเว็บเซอร์วิส HTTP/HTTPS ไม่ใช่การยืนยันชนิดฮาร์ดแวร์หรือ OS; IP ลงท้าย `.1`/`.254` ไม่เพียงพอจะสรุปว่าเป็น router โหมด LAN fingerprinting เป็นตัวเลือกแยกซึ่งแสดง source, confidence และ evidence; โปรโตคอลหรือชื่อบริการยังอาจบ่งชี้ได้เพียงตระกูล/บทบาท และไม่ควรถือเป็นหลักฐานยืนยัน ownership, รุ่น หรือ OS
 
 ---
 
@@ -196,6 +206,11 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 | `THSCAN_RCE_VERIFY_MEMORY_RESERVE_MB` | `1024` | RAM ที่สงวนไว้ไม่ให้ RCE worker ใช้ |
 | `THSCAN_RCE_VERIFY_WORKER_MEMORY_MB` | `512` | ประมาณการ RAM ต่อ worker เริ่มต้น; ปรับขึ้นตาม RSS สูงสุดที่วัดได้ |
 | `THSCAN_RCE_VERIFY_BATCH_TIMEOUT` | `7200` | เวลารวมสูงสุดของ batch (วินาที) |
+| `THSCAN_LAN_FINGERPRINT_ENABLED` | `0` | เปิดโหมด LAN fingerprinting แบบ opt-in |
+| `THSCAN_LAN_FINGERPRINT_MAX_TARGETS` | `256` | จำนวน IP สูงสุดต่อ job (hard cap สูงสุด 256) |
+| `THSCAN_LAN_FINGERPRINT_MAX_WORKERS` | `4` | concurrency สูงสุดของ NetBIOS unicast probe (hard cap 4) |
+| `THSCAN_LAN_FINGERPRINT_PROBE_TIMEOUT` | `0.8` | timeout ต่อ probe; ระบบ clamp ไม่เกิน 1 วินาที |
+| `THSCAN_LAN_FINGERPRINT_TOTAL_TIMEOUT` | `90` | deadline รวมต่อ fingerprint phase; ระบบ clamp ไม่เกิน 90 วินาที |
 | `THSCAN_MAX_PORT_PROBES` | `2000000` | ขีดจำกัด (ที่อยู่ × พอร์ต) ต่อการสแกน |
 | `THSCAN_MAX_SOCKETS` | *(คำนวณอัตโนมัติ)* | การเชื่อมต่อพร้อมกันทั้งโปรแกรม |
 | `THSCAN_GOV_SUFFIXES` | `go.th,or.th,mi.th,ac.th,in.th` | โดเมนที่ถือว่าเป็นของหน่วยงาน (ใช้กับโหมดลิงก์) |

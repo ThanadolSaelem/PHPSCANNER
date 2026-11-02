@@ -65,6 +65,11 @@ class ScanRequest(CompatBaseModel):
     demo_scenario: Optional[str] = Field(None)
     # optional active verification, authorized once before scan and streamed during fast inspection
     rce_verify: Optional[RceVerifyRequest] = None
+    # optional active LAN fingerprinting; each scan requires fresh consent
+    lan_fingerprint: bool = False
+    lan_fingerprint_confirm: bool = False
+    lan_multicast_discovery: bool = False
+    lan_multicast_confirm: bool = False
     # set by the server, never trusted from the client
     site_hosts: Dict[str, str] = Field(default_factory=dict)   # ip -> hostname
     extra_web_ports: List[int] = Field(default_factory=list)   # ports named in links
@@ -112,6 +117,10 @@ class Device(CompatBaseModel):
     up: bool = True
     mac: Optional[str] = None
     device_type: str = "LAN Device"
+    device_type_confidence: Confidence = Confidence.low
+    device_type_source: str = "fast-scan service role"
+    device_type_evidence: List[str] = Field(default_factory=list)
+    lan_fingerprint_status: str = "not_requested"
     service: str = "ไม่มีบริการเว็บ"
     php_version: Optional[str] = None
     server: Optional[str] = None
@@ -147,6 +156,11 @@ class ScanProgress(CompatBaseModel):
     rce_verify_completed: int = 0
     rce_verify_active: int = 0
     rce_verify_batch_size: int = 0
+    lan_fingerprint_started: bool = False
+    lan_fingerprint_done: bool = False
+    lan_fingerprint_total: int = 0
+    lan_fingerprint_completed: int = 0
+    lan_fingerprint_active: int = 0
 
 
 class ScheduleCreate(CompatBaseModel):
@@ -193,6 +207,7 @@ class ScanJob(CompatBaseModel):
     note_deep: Optional[str] = None    # why deep mode fell back, if it did
     chain_result: Optional[Dict[str, Any]] = None
     rce_verify_result: Optional[Dict[str, Any]] = None
+    lan_fingerprint_result: Optional[Dict[str, Any]] = None
 
     def security_score(self) -> int:
         if not self.devices:
@@ -246,6 +261,7 @@ class ScanJob(CompatBaseModel):
             "scanned_port_count": len(self.scanned_ports),
             "sites": self.request.sites,
             "rce_verify_requested": self.request.rce_verify is not None,
+            "lan_fingerprint_requested": self.request.lan_fingerprint,
             "security_score": self.security_score(),
             "security_grade": self.security_grade(),
         }

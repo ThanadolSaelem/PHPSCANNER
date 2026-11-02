@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 from ..config import Settings
 from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity, WebEndpoint
-from . import chain_runner, demo_scenarios, discovery, dns_resolver, http_probe, nmap_scan, port_scanner, ports, vuln_rules
+from . import chain_runner, demo_scenarios, discovery, dns_resolver, http_probe, lan_fingerprint, nmap_scan, port_scanner, ports, vuln_rules
 from .ip_utils import expand_targets, label_targets
 from . import rce_batch
 from .rce_batch import RceVerifyBatchStream
@@ -77,22 +77,26 @@ class ScanEngine:
             worker = asyncio.create_task(stream.run())
             try:
                 await self._run(job, cancel, on_web_endpoint=stream.submit)
+                job.progress.fast_scan_complete = not cancel.is_set()
+                if job.progress.fast_scan_complete and job.request.lan_fingerprint:
+                    await self._run_lan_fingerprint(job, cancel)
+                if job.progress.fast_scan_complete and stream.discovered:
+                    job.progress.phase = "rce_verify"
+                if not worker.done():
+                    await stream.finish()
+                await worker
             except BaseException:
                 if not worker.done():
                     await stream.finish()
                     worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
                 raise
-            job.progress.fast_scan_complete = not cancel.is_set()
-            if job.progress.fast_scan_complete and stream.discovered:
-                job.progress.phase = "rce_verify"
-            if not worker.done():
-                await stream.finish()
-            await worker
             return
 
         await self._run(job, cancel)
         job.progress.fast_scan_complete = not cancel.is_set()
+        if job.progress.fast_scan_complete and job.request.lan_fingerprint:
+            await self._run_lan_fingerprint(job, cancel)
         if cancel.is_set() or request is None:
             return
         job.progress.rce_verify_started = True
@@ -166,6 +170,46 @@ class ScanEngine:
                 result["error"] = "toolkit returned an invalid evidence path"
                 result["verdict"] = "ERROR"
         job.rce_verify_result = result
+
+    async def _run_lan_fingerprint(self, job: ScanJob, cancel: asyncio.Event) -> None:
+        """Annotate only scan-confirmed devices; never change vulnerability results."""
+        request = job.request
+        if not request.lan_fingerprint or not request.lan_fingerprint_confirm or cancel.is_set():
+            return
+        if request.scan_mode != "fast" or not request.targets or request.sites:
+            job.lan_fingerprint_result = {
+                "status": "rejected_request",
+                "error": "LAN fingerprinting requires a fast scan with direct IP/CIDR targets",
+                "target_count": 0,
+            }
+            job.progress.lan_fingerprint_started = True
+            job.progress.lan_fingerprint_done = True
+            return
+        if not self.settings.lan_fingerprint_enabled:
+            job.lan_fingerprint_result = {"status": "disabled", "target_count": 0}
+            job.progress.lan_fingerprint_started = True
+            job.progress.lan_fingerprint_done = True
+            return
+        job.progress.phase = "lan_fingerprint"
+        try:
+            job.lan_fingerprint_result = await lan_fingerprint.fingerprint_devices(
+                job.devices,
+                self.settings,
+                cancel,
+                job.progress,
+                multicast=bool(request.lan_multicast_discovery and request.lan_multicast_confirm),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # fingerprinting must not erase a completed fast-scan result
+            job.lan_fingerprint_result = {
+                "status": "error",
+                "error": f"LAN fingerprint failed: {type(exc).__name__}",
+                "target_count": len(job.devices),
+            }
+            job.progress.lan_fingerprint_started = True
+            job.progress.lan_fingerprint_done = True
+            job.progress.lan_fingerprint_total = len(job.devices)
 
     async def _run_rce_verify_batch(self, job: ScanJob, request, cancel: asyncio.Event) -> None:
         """Fallback for direct callers; the normal pipeline uses the live endpoint stream."""
@@ -459,6 +503,12 @@ class ScanEngine:
                     ip=ip, hostname=hostname, matched_suffix=matched_suffix, up=True,
                     mac=arp.get(ip) or tmeta.get("mac"),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
+                    device_type_confidence=Confidence.low,
+                    device_type_source="fast-scan service role",
+                    device_type_evidence=(
+                        [f"TCP web ports: {', '.join(map(str, sorted(web_open)))}"] if web_open
+                        else [f"TCP open ports: {', '.join(map(str, found))}"] if found else []
+                    ),
                     service=service, php_version=php_version, server=server, cms=cms, runtime=runtime,
                     open_ports=sorted(web_open), web_endpoints=web_endpoints,
                     services=services, latency_ms=latency,

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .config import settings
 from .models import JobState, RceVerifyRequest, ScanRequest, ScheduleCreate
-from .scanner import demo_scenarios, discovery, netlimit, ports, sites
+from .scanner import demo_scenarios, discovery, lan_fingerprint, netlimit, ports, sites
 from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
 from .scanner import chain_runner, nmap_scan
 from .scheduler import CronError, Scheduler, local_tz, parse_cron
@@ -69,6 +69,9 @@ async def get_config() -> dict:
         "rce_verify_enabled": settings.rce_verify_enabled,
         "rce_verify_max_endpoints": max(0, min(100000, settings.rce_verify_max_endpoints)),
         "rce_verify_max_workers": max(1, min(8, settings.rce_verify_max_workers)),
+        "lan_fingerprint_enabled": settings.lan_fingerprint_enabled,
+        "lan_fingerprint_max_targets": max(1, min(256, settings.lan_fingerprint_max_targets)),
+        "lan_fingerprint_max_workers": max(1, min(4, settings.lan_fingerprint_max_workers)),
         "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
         "max_port_probes": settings.max_port_probes,
@@ -129,6 +132,26 @@ async def create_scan(
     req: ScanRequest,
     authorization: str | None = Header(default=None),
 ) -> dict:
+    if req.lan_multicast_discovery and not req.lan_fingerprint:
+        raise HTTPException(400, "mDNS/SSDP multicast ต้องเปิด LAN fingerprinting ด้วย")
+    if (req.lan_fingerprint_confirm or req.lan_multicast_confirm) and not req.lan_fingerprint:
+        raise HTTPException(400, "ไม่รับ consent สำหรับ LAN fingerprinting ที่ไม่ได้ร้องขอ")
+    if req.lan_fingerprint:
+        if not settings.lan_fingerprint_enabled:
+            raise HTTPException(403, "ปิด LAN fingerprinting อยู่ (ต้องเปิด THSCAN_LAN_FINGERPRINT_ENABLED=1)")
+        if not req.lan_fingerprint_confirm:
+            raise HTTPException(400, "ต้องยืนยัน consent สำหรับ LAN fingerprinting ในงานนี้")
+        if req.demo_scenario:
+            raise HTTPException(400, "LAN fingerprinting ใช้กับงานสาธิตไม่ได้")
+        if req.scan_mode != "fast":
+            raise HTTPException(400, "LAN fingerprinting รองรับเฉพาะ fast scan")
+        if req.sites:
+            raise HTTPException(400, "LAN fingerprinting รับเฉพาะ IP/CIDR โดยตรง ไม่รับเว็บไซต์หรือ DNS targets")
+        if req.lan_multicast_discovery and not req.lan_multicast_confirm:
+            raise HTTPException(400, "ต้องยืนยันแยกว่ารับทราบผลกระทบของ mDNS/SSDP multicast")
+        if req.lan_multicast_confirm and not req.lan_multicast_discovery:
+            raise HTTPException(400, "ต้องเลือก mDNS/SSDP multicast ก่อนจึงจะส่ง consent ได้")
+
     if req.rce_verify is not None:
         _require_rce_authorization(req.rce_verify, authorization)
         _validate_rce_verify_request(req.rce_verify)
@@ -173,9 +196,19 @@ async def create_scan(
     if not req.targets:
         raise HTTPException(400, "ไม่ได้ระบุเป้าหมาย")
     try:
-        _, total = expand_targets(req.targets, settings.max_targets)
+        expanded_targets, total = expand_targets(req.targets, settings.max_targets)
     except TargetError as exc:
         raise HTTPException(400, str(exc))
+    if req.lan_fingerprint:
+        fingerprint_cap = max(1, min(256, settings.lan_fingerprint_max_targets))
+        if total > fingerprint_cap:
+            raise HTTPException(
+                400,
+                f"LAN fingerprint จำกัด {fingerprint_cap} IP ต่อครั้ง; ลดช่วงเป้าหมายก่อนเริ่มงาน",
+            )
+        scope_error, _ = lan_fingerprint.validate_targets(expanded_targets)
+        if scope_error:
+            raise HTTPException(403, scope_error)
     # The IP scope is a hard limit only when THSCAN_ENFORCE_SCOPE is on. By
     # default the operator may scan anything they type; website targets are
     # never bound by the IP scope regardless.
@@ -367,6 +400,10 @@ async def export_csv(job_id: str) -> Response:
             "hostname",
             "mac",
             "device_type",
+            "device_type_confidence",
+            "device_type_source",
+            "device_type_evidence",
+            "lan_fingerprint_status",
             "service",
             "runtime",
             "php_version",
@@ -387,6 +424,10 @@ async def export_csv(job_id: str) -> Response:
                 d.hostname or "",
                 d.mac or "",
                 d.device_type,
+                d.device_type_confidence.value,
+                d.device_type_source,
+                " | ".join(d.device_type_evidence),
+                d.lan_fingerprint_status,
                 d.service,
                 d.runtime or "",
                 d.php_version or "",

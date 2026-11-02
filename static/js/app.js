@@ -64,7 +64,7 @@ const SEV = {
 };
 const sevBadge = (s) => `<span class="badge ${SEV[s].cls}">${ic(SEV[s].icon, 13, 2.6)}${SEV[s].word}</span>`;
 const CONF = { confirmed: "ยืนยันแล้ว", high: "สูง", medium: "ปานกลาง", low: "ต่ำ" };
-const DEVTYPE = { "Gateway Router": "อาจเป็นเกตเวย์ (ผลเดิม: เดาจาก IP)", "Web Server (HTTPS)": "พบเว็บเซอร์วิส (HTTPS)", "Web Server (HTTP)": "พบเว็บเซอร์วิส (HTTP)", "LAN Device (other services)": "พบอุปกรณ์เครือข่าย (มีบริการอื่น)", "LAN Device": "อุปกรณ์เครือข่าย (ยังไม่ทราบชนิด)" };
+const DEVTYPE = { "Gateway Router": "อาจเป็นเกตเวย์ (ผลเดิม: เดาจาก IP)", "Web Server (HTTPS)": "พบเว็บเซอร์วิส (HTTPS)", "Web Server (HTTP)": "พบเว็บเซอร์วิส (HTTP)", "LAN Device (other services)": "พบอุปกรณ์เครือข่าย (มีบริการอื่น)", "LAN Device": "อุปกรณ์เครือข่าย (ยังไม่ทราบชนิด)", "Apple iPhone (model hint)": "อาจเป็น Apple iPhone (hint จาก model)", "Apple iPad (model hint)": "อาจเป็น Apple iPad (hint จาก model)", "Apple MacBook (model hint)": "อาจเป็น Apple MacBook (hint จาก model)", "Apple Mac (model hint)": "อาจเป็น Apple Mac (hint จาก model)", "Possible router / Internet gateway": "อาจเป็น router / Internet gateway", "Network printer (probable)": "อาจเป็นเครื่องพิมพ์เครือข่าย", "Possible printer (name hint)": "อาจเป็นเครื่องพิมพ์ (hint จากชื่อ)", "Apple ecosystem service (device class unknown)": "พบ Apple ecosystem service (ยังไม่ทราบชนิดเครื่อง)", "Google Cast / media device hint": "อาจเป็น Google Cast / อุปกรณ์สื่อ", "Workstation / SMB-compatible host (OS unconfirmed)": "อาจเป็น workstation / SMB-compatible (ยังไม่ยืนยัน OS)" };
 const devType = (t) => DEVTYPE[t] || t || "—";
 const STATE = { queued: "รอคิว", running: "กำลังสแกน", completed: "เสร็จแล้ว", cancelled: "ยกเลิกแล้ว", failed: "ผิดพลาด" };
 const DOW = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
@@ -411,7 +411,7 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, report: null, reportFor: "", detected: [] };
+  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
   ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์หรือชื่อโดเมน", "globe"],
@@ -491,7 +491,7 @@ async function viewScan(_, alive) {
   render(`<div class="app narrow">
   <div class="in1" style="text-align:center">
     <h1 class="h1">ตรวจเครือข่ายของคุณ <span class="gtext">ได้ในคลิกเดียว</span></h1>
-    <p class="lead">ระบบเลือกค่าที่เหมาะให้แล้ว · ชี้ที่แถบด้านล่างเมื่อต้องการปรับ · อ่านอย่างเดียว ไม่ทำลายระบบ</p>
+    <p class="lead">ระบบเลือกค่าที่เหมาะให้แล้ว · ชี้ที่แถบด้านล่างเมื่อต้องการปรับ · โหมดปกติไม่แก้ไขระบบ; active probes ต้องเลือกและยืนยันแยกก่อนเริ่ม</p>
   </div>
   <div class="tools in2" style="margin-top:22px">
     ${dock("d-target", `<button type="button" class="peek"><span class="ic">1</span><span style="min-width:0"><span class="k">เป้าหมาย</span><span class="v" id="sum-target"></span></span>${chev}</button>`, `<div id="p-target"></div>`, { w: 520 })}
@@ -525,6 +525,16 @@ async function viewScan(_, alive) {
     const body = { ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2 };
     btn.disabled = true;
     try {
+      if (S.lanFingerprint) {
+        if (!cfg.lan_fingerprint_enabled || S.mode === "site" || S.mode2 !== "fast") {
+          throw new Error("LAN fingerprinting ต้องเปิดใช้ฝั่งเซิร์ฟเวอร์และใช้ fast scan กับ IP/CIDR โดยตรงเท่านั้น");
+        }
+        const cap = Number(cfg.lan_fingerprint_max_targets) || 256;
+        if (plan.count > cap) throw new Error(`LAN fingerprint จำกัด ${num(cap)} IP ต่อครั้ง; ลดช่วงเป้าหมายก่อนเริ่ม`);
+        openLanFingerprintForm(body);
+        btn.disabled = false;
+        return;
+      }
       await startScan(body);
     }
     catch (err) { toast(err.message); btn.disabled = false; }
@@ -535,7 +545,7 @@ async function viewScan(_, alive) {
   pt.addEventListener("click", (e) => {
     const m = e.target.closest("[data-mode]"), d = e.target.closest("[data-detected]");
     if (m && m.dataset.mode !== S.mode) {
-      S.mode = m.dataset.mode; S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true);
+      S.mode = m.dataset.mode; if (S.mode === "site") S.lanFingerprint = false; S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true);
       if (S.mode === "site") resolveSites();
       const first = $("input", pt); first && first.focus({ preventScroll: true });
     }
@@ -591,6 +601,11 @@ async function viewScan(_, alive) {
     renderAdvValues(); updateScan();
   });
   $("#p-adv").addEventListener("change", (e) => {
+    if (e.target.id === "lan-fingerprint") {
+      S.lanFingerprint = !!e.target.checked;
+      updateScan();
+      return;
+    }
     if (e.target.id !== "rce-after") return;
     if (!e.target.checked) {
       S.rceVerify = false;
@@ -614,7 +629,7 @@ async function viewScan(_, alive) {
     const b = e.target.closest("[data-mode2]");
     if (b && !b.disabled && b.dataset.mode2 !== S.mode2) {
       S.mode2 = b.dataset.mode2;
-      if (S.mode2 !== "fast") S.rceVerify = false;
+      if (S.mode2 !== "fast") { S.rceVerify = false; S.lanFingerprint = false; }
       renderAdvPanel(); updateScan();
     }
   });
@@ -715,6 +730,11 @@ function renderAdvPanel() {
     ${S.mode2 === "fast" ? `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:14px;background:${cfg.rce_verify_enabled ? "var(--soft)" : "#F7F7FA"}">
       <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ยืนยันใช้ RCE Verify แบบ active ระหว่าง fast scan <span style="font-weight:400;color:var(--muted)">— เริ่มเมื่อ probe ยืนยัน endpoint แล้วส่งตรวจทุก endpoint โดยไม่สุ่มเลือก; ${Number(cfg.rce_verify_max_endpoints) > 0 ? `เพดาน ${num(cfg.rce_verify_max_endpoints)} endpoints` : "ไม่จำกัดจำนวน endpoint"}</span></span></label>
       ${cfg.rce_verify_enabled ? "" : `<p class="od" style="margin-top:6px">ผู้ดูแลต้องเปิด <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> ฝั่งเซิร์ฟเวอร์ก่อน</p>`}
+    </div>` : ""}
+    ${S.mode2 === "fast" ? `<div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:14px;background:${cfg.lan_fingerprint_enabled ? "var(--soft)" : "#F7F7FA"}">
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="lan-fingerprint" type="checkbox" ${S.lanFingerprint ? "checked" : ""} ${cfg.lan_fingerprint_enabled && S.mode !== "site" ? "" : "disabled"} style="margin-top:5px"><span>ระบุชนิดอุปกรณ์ใน LAN (เลือกใช้) <span style="font-weight:400;color:var(--muted)">— ตรวจเฉพาะ IP ที่ fast scan ยืนยันแล้ว · สูงสุด ${num(cfg.lan_fingerprint_max_targets || 256)} IP · คำขอพื้นฐานเป็น unicast</span></span></label>
+      ${cfg.lan_fingerprint_enabled ? `<p class="od" style="margin-top:6px">ก่อนเริ่มจะขอ consent แยก; รับเฉพาะ RFC1918 ที่อยู่บน interface จริงของเครื่องนี้ และไม่ใช้ Nmap raw-socket</p><p class="od" style="margin-top:3px">mDNS/SSDP multicast ซึ่งอาจถึงทุกเครื่องในวงเป็นตัวเลือกแยกในหน้าต่างยืนยัน</p>` : `<p class="od" style="margin-top:6px">ผู้ดูแลต้องเปิด <span class="mono">THSCAN_LAN_FINGERPRINT_ENABLED=1</span> ฝั่งเซิร์ฟเวอร์ก่อน</p>`}
+      ${S.mode === "site" ? `<p class="od" style="margin-top:3px">ใช้ได้เฉพาะ IP/CIDR โดยตรง ไม่รองรับเว็บไซต์หรือ DNS target</p>` : ""}
     </div>` : ""}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
     <label style="display:block"><span class="lbl" style="justify-content:space-between"><span style="display:flex;align-items:center;gap:6px">ความเร็ว ${tip("จำนวนการเชื่อมต่อพร้อมกัน ลดลงได้ถ้าเครือข่ายช้า หรือไม่อยากกระทบการใช้งาน")}</span><b style="color:var(--ink)" id="speed-v"></b></span>
@@ -821,7 +841,7 @@ function updateScan(modeChanged) {
     ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
     ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
     ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "fast" && S.rceVerify ? "กรอกแบบฟอร์มก่อนเริ่ม แล้ว RCE Verify จะเริ่มเป็น batch ทันทีที่ probe ยืนยัน endpoint ระหว่าง fast scan" : "สแกนปกติแบบอ่านอย่างเดียว"}</div></div>`;
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "fast" && S.rceVerify ? "กรอกแบบฟอร์มก่อนเริ่ม แล้ว RCE Verify จะเริ่มเป็น batch ทันทีที่ probe ยืนยัน endpoint ระหว่าง fast scan" : S.lanFingerprint ? "มี active LAN probes หลัง fast scan โดยต้องยืนยันขอบเขตและ consent ก่อนเริ่ม" : "สแกนปกติแบบอ่านอย่างเดียว"}</div></div>`;
   $("#go").disabled = !ok || S.rceVerify;
 }
 
@@ -836,6 +856,7 @@ async function viewScanning([id], alive) {
     ["หาเครื่องออนไลน์", "ลองเชื่อมต่อทุกที่อยู่ตามชุดพอร์ตที่เลือก เพื่อดูว่าเครื่องไหนเปิดใช้งานอยู่"],
     ["ตรวจพอร์ต เว็บ และช่องโหว่", "ดูว่าเครื่องที่ออนไลน์เปิดบริการอะไร ตรวจหาช่องโหว่ PHP2Shell และสำรวจรายละเอียดตามโหมดที่เลือก"],
   ];
+  if (s.lan_fingerprint_requested) STEPS.push(["ระบุชนิดอุปกรณ์ใน LAN", "หลัง fast scan จะตรวจเฉพาะเครื่องที่ยืนยันแล้ว; multicast ทำเฉพาะเมื่อผู้ใช้ยินยอมแยก"]);
   if (s.rce_verify_requested) STEPS.push(["RCE Verify", "เริ่ม active verification ทันทีที่ fast scan ยืนยัน endpoint และทำงานเป็น batch ระหว่างตรวจเครื่องอื่น"]);
   render(`<div class="app thin" style="text-align:center">
     <div class="in1">
@@ -892,24 +913,36 @@ async function viewScanning([id], alive) {
     if (!todoEl || !doneEl || !ringEl || !pctEl) return;
     const p = s.progress || {}, total = Math.max(1, p.total_ips || 1);
     const rceRequested = !!s.rce_verify_requested;
+    const lanRequested = !!s.lan_fingerprint_requested;
     const scanComplete = !!p.fast_scan_complete;
     const rceStarted = !!p.rce_verify_started;
     const rceDone = !!p.rce_verify_done;
+    const lanStarted = !!p.lan_fingerprint_started;
+    const lanDone = !!p.lan_fingerprint_done;
     const inspect = ["inspect", "cybers_rmutl", "traceroute"].includes(p.phase);
     const frac1 = Math.min(1, (p.probed || 0) / total), frac2 = inspect ? (p.to_inspect ? (p.inspected || 0) / p.to_inspect : 1) : 0;
     const rceFrac = p.rce_verify_total ? Math.min(1, (p.rce_verify_completed || 0) / p.rce_verify_total) : 0;
-    const pct = scanComplete ? (rceRequested ? (rceDone ? 100 : 95 + Math.round(rceFrac * 5)) : 100)
+    const lanFrac = p.lan_fingerprint_total ? Math.min(1, (p.lan_fingerprint_completed || 0) / p.lan_fingerprint_total) : (lanDone ? 1 : 0);
+    const postFractions = [lanRequested ? (lanDone ? 1 : lanStarted ? lanFrac : 0) : null,
+      rceRequested ? (rceDone ? 1 : rceStarted ? rceFrac : 0) : null].filter((x) => x != null);
+    const postPct = postFractions.length ? 95 + Math.round(5 * postFractions.reduce((a, b) => a + b, 0) / postFractions.length) : 100;
+    const pct = scanComplete ? postPct
       : inspect ? Math.min(94, 55 + Math.round(frac2 * 35) + (rceStarted ? Math.round(rceFrac * 4) : 0))
         : Math.round(frac1 * 55);
-    const stage = scanComplete ? (rceRequested ? 3 : 2) : !p.phase ? 0 : inspect ? 2 : 1;
-    const fills = [p.phase ? 1 : 0.5, inspect || scanComplete ? 1 : frac1,
-      scanComplete ? 1 : frac2, rceDone ? 1 : rceStarted ? Math.max(0.15, rceFrac) : 0];
+    const lanIndex = lanRequested ? 3 : -1;
+    const rceIndex = rceRequested ? (lanRequested ? 4 : 3) : -1;
+    const stage = scanComplete ? (lanRequested && !lanDone ? lanIndex : rceRequested && !rceDone ? rceIndex : STEPS.length - 1)
+      : !p.phase ? 0 : inspect ? 2 : 1;
+    const fills = [p.phase ? 1 : 0.5, inspect || scanComplete ? 1 : frac1, scanComplete ? 1 : frac2];
+    if (lanRequested) fills.push(lanDone ? 1 : lanStarted ? Math.max(0.15, lanFrac) : 0);
+    if (rceRequested) fills.push(rceDone ? 1 : rceStarted ? Math.max(0.15, rceFrac) : 0);
     $$(`[id^=seg]`).forEach((b, i) => b.style.setProperty("--f", `${Math.round((fills[i] || 0) * 100)}%`));
     const steps = STEPS.map(([t, h], i) => {
       const st = i === 0 ? (p.phase ? "done" : "on")
         : i === 1 ? (scanComplete || inspect ? "done" : p.phase ? "on" : "wait")
           : i === 2 ? (scanComplete ? "done" : inspect ? "on" : "wait")
-            : rceDone ? "done" : rceStarted ? "on" : "wait";
+            : i === lanIndex ? (lanDone ? "done" : lanStarted ? "on" : "wait")
+              : i === rceIndex ? (rceDone ? "done" : rceStarted ? "on" : "wait") : "wait";
       return `<li style="display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:center;padding:8px 10px;border-radius:12px;background:${st === "on" ? "var(--soft)" : "transparent"}">
         <span style="width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:${st === "wait" ? "var(--muted)" : "#fff"};background:${st === "wait" ? "#F0F2F8" : "var(--grad)"}">${st === "done" ? "✓" : i + 1}</span>
         <span style="min-width:0"><span class="ot">${t}</span><span class="od">${h}</span></span><span class="badge ${st === "done" ? "b-ok" : st === "on" ? "b-blue" : "b-grey"}">${st === "done" ? "เสร็จ" : st === "on" ? "กำลังทำ" : "รอคิว"}</span></li>`;
@@ -933,8 +966,11 @@ async function viewScanning([id], alive) {
         ? "RCE Verify พร้อมเริ่มเมื่อ probe ยืนยัน endpoint แรก"
         : `RCE Verify ${num(p.rce_verify_completed)}/${num(p.rce_verify_total)} endpoint${rceDone ? " · เสร็จแล้ว" : ` · batch ${num(p.rce_verify_batch_size)} · active ${num(p.rce_verify_active)}`}${p.rce_verify_limit_reached ? " · ถึงเพดาน endpoint" : ""}`
       : "RCE Verify รอ fast scan";
+    const lanProgress = lanRequested && lanStarted
+      ? `LAN fingerprint ${num(p.lan_fingerprint_completed)}/${num(p.lan_fingerprint_total)} เครื่อง${lanDone ? " · เสร็จแล้ว" : ` · active ${num(p.lan_fingerprint_active)}`}`
+      : "LAN fingerprint รอ fast scan";
     const phase = stopping ? "กำลังหยุด…" : scanComplete
-      ? `${rceRequested ? `ขั้นที่ 4 จาก 4 · ${rceProgress}` : "สแกนเสร็จแล้ว"}`
+      ? `${lanRequested && !lanDone ? `ขั้นที่ ${lanIndex + 1} จาก ${STEPS.length} · ${lanProgress}` : rceRequested && !rceDone ? `ขั้นที่ ${rceIndex + 1} จาก ${STEPS.length} · ${rceProgress}` : "สแกนเสร็จแล้ว"}${lanRequested && rceRequested && rceStarted && !rceDone ? ` · ${rceProgress}` : ""}`
       : inspect
         ? `ขั้นที่ 3 จาก ${STEPS.length} · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)${rceRequested ? ` · ${rceProgress}` : ""}`
         : `ขั้นที่ ${stage + 1} จาก ${STEPS.length} · ${stepLabel}${rceRequested && rceStarted ? ` · ${rceProgress}` : ""}`;
@@ -1025,6 +1061,7 @@ function renderResults() {
   ${j.state === "cancelled" ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>การสแกนนี้ถูกหยุดก่อนเสร็จ ผลอาจไม่ครบทุกเครื่อง</span></p>` : ""}
   ${j.state === "failed" ? `<p class="notice b-bad in1" style="margin-top:14px">${ic("alert", 20)}<span>การสแกนผิดพลาด: ${esc(j.error || "ไม่ทราบสาเหตุ")}</span></p>` : ""}
   ${j.note_deep ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>${esc(j.note_deep)}</span></p>` : ""}
+  ${j.lan_fingerprint_requested ? `<p class="notice ${j.lan_fingerprint_result && j.lan_fingerprint_result.status === "completed" ? "b-blue" : "b-warn"} in1" style="margin-top:14px">${ic("shield", 20)}<span>LAN fingerprint: ${esc(j.lan_fingerprint_result && j.lan_fingerprint_result.status || "ไม่สมบูรณ์")} · พบ hint ${num(j.lan_fingerprint_result && j.lan_fingerprint_result.matched || 0)} / ${num(j.lan_fingerprint_result && j.lan_fingerprint_result.target_count || 0)} เครื่อง${j.lan_fingerprint_result && j.lan_fingerprint_result.multicast_enabled ? " · ใช้ mDNS/SSDP multicast" : " · ไม่ใช้ multicast"}${j.lan_fingerprint_result && j.lan_fingerprint_result.error ? ` · ${esc(j.lan_fingerprint_result.error)}` : ""} · การระบุเป็นเพียงข้อสันนิษฐาน ไม่ยืนยันรุ่นหรือ OS</span></p>` : ""}
   ${(j.intercepted_ports || []).length ? `<p class="notice b-blue in1" style="margin-top:14px">${ic("shield", 20)}<span>พบอุปกรณ์กลางทาง (เช่น proxy หรือ firewall) ตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(j.intercepted_ports.join(", "))}</span> — ระบบตัดเครื่องที่ไม่มีอยู่จริงออกให้แล้ว</span></p>` : ""}
   <dl class="card stats in2" style="margin-top:16px;margin-bottom:0">
     <div class="stat sec"><dt class="muted">ออนไลน์ ${tip("เครื่องที่ตอบรับการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง")}</dt><dd style="color:var(--blue-ink)"><span class="cnt" data-to="${j.devices.length}">0</span><small> / ${num(j.progress.total_ips)}</small></dd></div>
@@ -1156,16 +1193,56 @@ function showRceVerifyResult(result) {
     ${result.evidence_dir ? `<p class="muted" style="margin-top:8px;font-size:13px">หลักฐาน: <span class="mono">${esc(result.evidence_dir)}</span>${files.length ? ` · ${esc(files.join(", "))}` : ""}</p>` : ""}
     <div class="modal-foot"><button type="button" class="btn btn-g" data-close>ปิด</button></div>`, "ผล RCE Verify");
 }
+function openLanFingerprintForm(scanBody) {
+  const cap = Number(cfg.lan_fingerprint_max_targets) || 256;
+  const targets = (scanBody.targets || []).join(", ") || "—";
+  const targetCount = scanPlan().count;
+  let launched = false;
+  const m = openModal(`<h2>ยืนยัน LAN fingerprinting</h2>
+    <p class="notice b-warn" style="margin-top:12px">${ic("shield", 20)}<span>ขอบเขตงาน: <span class="mono">${esc(targets)}</span> · ${num(targetCount)} IP · เซิร์ฟเวอร์ยอมรับเฉพาะ RFC1918 IPv4 บน interface ที่กำลัง up และตรวจ route ของ OS ว่า on-link ไม่มี gateway (สูงสุด ${num(cap)} IP); เว็บไซต์, DNS targets, public IP และเครือข่ายที่ผ่าน router จะถูกปฏิเสธก่อนส่ง probe</span></p>
+    <p class="lead" style="margin-top:10px">โหมดพื้นฐานส่ง NetBIOS node-status แบบ unicast ไปยังแต่ละ IP ที่ fast scan ยืนยันแล้ว จำกัด concurrency และ timeout; ไม่ยืนยัน OS/รุ่นอุปกรณ์โดยแน่นอน และไม่มีการปรับคะแนนช่องโหว่</p>
+    <form id="lan-fingerprint-form" style="display:grid;gap:10px;margin-top:14px">
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="lan-fp-confirm" type="checkbox" required style="margin-top:5px"><span>ฉันมีอำนาจและได้รับอนุญาตให้ตรวจอุปกรณ์ในขอบเขตที่แสดงด้านบน และยินยอมให้ส่ง unicast fingerprint probes ในงานนี้</span></label>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="lan-fp-multicast" type="checkbox" style="margin-top:5px"><span>ตัวเลือกเพิ่มเติม: ฉันยินยอมให้ส่ง mDNS/SSDP multicast บน interface ที่ตรงกับเป้าหมาย คำขอนี้อาจมองเห็นได้โดยอุปกรณ์ทุกเครื่องในวง ไม่ใช่เฉพาะ IP ที่เลือก; ระบบจะเก็บผลเฉพาะ IP เป้าหมายและจะไม่เปิด URL LOCATION ที่ตอบกลับ</span></label>
+      <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="submit" class="btn btn-danger" id="lan-fp-run" disabled>ยืนยันและเริ่ม fast scan</button></div>
+    </form>`, "ยืนยัน LAN fingerprinting", () => {
+      if (!launched) { S.lanFingerprint = true; renderAdvPanel(); updateScan(); }
+    });
+  const form = $("#lan-fingerprint-form", m.el), confirmBox = $("#lan-fp-confirm", m.el), run = $("#lan-fp-run", m.el);
+  confirmBox.addEventListener("change", () => { run.disabled = !confirmBox.checked; });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const multicast = $("#lan-fp-multicast", m.el).checked;
+    run.disabled = true; run.textContent = "กำลังเริ่มสแกน…";
+    try {
+      const job = await api("/api/scans", {
+        method: "POST",
+        body: JSON.stringify({ ...scanBody, lan_fingerprint: true, lan_fingerprint_confirm: true,
+          lan_multicast_discovery: multicast, lan_multicast_confirm: multicast }),
+      });
+      launched = true; S.lanFingerprint = false; m.close();
+      location.hash = `#/scan/${job.id}`;
+    } catch (err) {
+      run.textContent = "ยืนยันและเริ่ม fast scan"; run.disabled = !confirmBox.checked; toast(err.message);
+    }
+  });
+}
 function openRceVerifyForm(scanBody) {
   const submitLabel = "เริ่ม fast scan + RCE Verify พร้อมกัน";
   const endpointCap = Number(cfg.rce_verify_max_endpoints) || 0;
   const endpointPolicy = endpointCap > 0
     ? `เพดานที่ผู้ดูแลตั้งไว้ ${num(endpointCap)} endpoints · ส่วนที่เกินจะไม่เริ่มตรวจและจะแสดงจำนวนชัดเจน`
     : "ตรวจทุก endpoint ที่ fast scan ยืนยัน · คิวมีขนาดจำกัดเพื่อคุม RAM";
+  const lanCap = Number(cfg.lan_fingerprint_max_targets) || 256;
+  const lanAvailable = !!cfg.lan_fingerprint_enabled && Array.isArray(scanBody.targets) && S.mode !== "site" && S.mode2 === "fast" && scanPlan().count <= lanCap;
+  const lanTargets = (scanBody.targets || []).join(", ") || "—";
+  const lanTargetCount = scanPlan().count;
   let launched = false;
   const m = openModal(`<h2>ตั้งค่า fast scan + RCE Verify</h2>
     <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>การเลือกนี้เป็นการยืนยัน active test หนึ่งครั้งสำหรับงานนี้ เมื่อ fast scan ยืนยัน HTTP(S) endpoint แรก RCE Verify จะเริ่มทันทีเป็น batch ระหว่างที่ scan เครื่องอื่นต่อ โดยไม่สุ่มเลือก ปลายทางจะถูก pin กับ IP/origin ที่ยืนยันจาก fast scan; ใช้เฉพาะระบบที่หน่วยงานได้รับอนุญาต</span></p>
     <p class="notice b-blue" style="margin-top:10px">${ic("shield", 18)}<span>${endpointPolicy} · concurrency ปรับตามหน่วยความจำ</span></p>
+    ${S.lanFingerprint && !lanAvailable ? `<p class="notice b-warn" style="margin-top:10px">${ic("warn", 18)}<span>LAN fingerprint ที่เลือกไว้ไม่ถูกรวม เพราะเป้าหมายไม่ใช่ IP/CIDR โดยตรงหรือเกินเพดาน ${num(lanCap)} IP</span></p>` : ""}
     <p class="lead">Bearer token ใช้ยืนยันคำขอครั้งนี้เท่านั้นและไม่ถูกบันทึกใน browser หรือ scan job</p>
     <form id="rce-form" style="display:grid;gap:10px;margin-top:14px">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
@@ -1173,6 +1250,14 @@ function openRceVerifyForm(scanBody) {
         <label><span class="lbl">Operator</span><input class="inp" id="rce-operator" maxlength="120" value="thscan-operator" required></label>
       </div>
       <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="rce-no-ssl" type="checkbox" style="margin-top:5px"><span>ปิดการตรวจ SSL certificate (ใช้เฉพาะกรณีจำเป็น เช่น self-signed)</span></label>
+      ${lanAvailable ? `<div style="padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--soft)">
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-lan-use" type="checkbox" ${S.lanFingerprint ? "checked" : ""} style="margin-top:5px"><span>เพิ่ม LAN fingerprint ในงานเดียวกัน (สูงสุด ${num(lanCap)} IP)</span></label>
+        <p class="od" style="margin-top:5px">ขอบเขต: <span class="mono">${esc(lanTargets)}</span> · ${num(lanTargetCount)} IP · จำกัดเฉพาะ RFC1918 ที่ OS ยืนยันว่าอยู่บน direct on-link route ของ interface เครื่อง thscan; ต้องยืนยันด้านล่าง</p>
+        <div id="rce-lan-consent" style="display:${S.lanFingerprint ? "grid" : "none"};gap:8px;margin-top:8px">
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="rce-lan-confirm" type="checkbox" style="margin-top:5px"><span>ฉันมีอำนาจและอนุญาตให้ส่ง unicast fingerprint probes ไปยังขอบเขตนี้ในงานนี้</span></label>
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px"><input id="rce-lan-multicast" type="checkbox" style="margin-top:5px"><span>ยินยอมเพิ่ม mDNS/SSDP multicast ซึ่งอาจมองเห็นได้โดยอุปกรณ์ทุกเครื่องในวง (ไม่ใช่เฉพาะเป้าหมาย); เก็บเฉพาะผลเป้าหมายและไม่เปิด LOCATION URL</span></label>
+        </div>
+      </div>` : ""}
       <label><span class="lbl">Bearer token</span><input class="inp" id="rce-token" type="password" autocomplete="off" required placeholder="กรอก token จากผู้ดูแลระบบ"></label>
       <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="submit" class="btn btn-danger" id="rce-run" disabled>${submitLabel}</button></div>
     </form>`, "ตั้งค่าการตรวจ RCE Verify", () => {
@@ -1183,8 +1268,17 @@ function openRceVerifyForm(scanBody) {
   });
   $("#rce-timeout", m.el).focus();
   const form = $("#rce-form", m.el), token = $("#rce-token", m.el), run = $("#rce-run", m.el);
-  const validate = () => { run.disabled = !token.value.trim(); };
+  const lanUse = $("#rce-lan-use", m.el), lanConfirm = $("#rce-lan-confirm", m.el);
+  const lanConsent = $("#rce-lan-consent", m.el);
+  const validate = () => {
+    const selected = !!(lanUse && lanUse.checked);
+    if (lanConsent) lanConsent.style.display = selected ? "grid" : "none";
+    if (lanConfirm) lanConfirm.required = selected;
+    run.disabled = !token.value.trim() || (selected && !lanConfirm.checked);
+  };
   token.addEventListener("input", validate);
+  lanUse && lanUse.addEventListener("change", validate);
+  lanConfirm && lanConfirm.addEventListener("change", validate);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
@@ -1197,15 +1291,25 @@ function openRceVerifyForm(scanBody) {
       operator: $("#rce-operator", m.el).value.trim(),
       confirm: true,
     };
+    const lanSelected = !!(lanUse && lanUse.checked);
+    const multicast = !!(lanSelected && $("#rce-lan-multicast", m.el).checked);
+    const scanPayload = { ...scanBody, rce_verify: body };
+    if (lanSelected) Object.assign(scanPayload, {
+      lan_fingerprint: true,
+      lan_fingerprint_confirm: true,
+      lan_multicast_discovery: multicast,
+      lan_multicast_confirm: multicast,
+    });
     try {
       const job = await api("/api/scans", {
         method: "POST",
         headers: { Authorization: `Bearer ${secret}` },
-        body: JSON.stringify({ ...scanBody, rce_verify: body }),
+        body: JSON.stringify(scanPayload),
       });
       token.value = "";
       launched = true;
       S.rceVerify = false;
+      S.lanFingerprint = false;
       m.close();
       location.hash = `#/scan/${job.id}`;
     } catch (err) {
@@ -1280,7 +1384,8 @@ function paintTabs() {
       : `<p class="muted" style="font-size:14px">ไม่พบพอร์ตที่เปิด${(R.job.scanned_ports || []).length ? ` จาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ` : ""}</p>`;
   } else {
     const kv = [["IP", d.ip, ""], ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
-      ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นได้จากตาราง ARP ใน LAN เดียวกันเท่านั้น; หากผ่าน router อาจเป็น MAC ของ next hop และ OUI ไม่ยืนยันชนิดหรือรุ่นอุปกรณ์"], ["บทบาท/ชนิด", devType(d.device_type), "เป็นเพียงบทบาทบริการที่สังเกตได้ ไม่ยืนยันฮาร์ดแวร์หรือ OS; IP ลงท้าย .1/.254 เพียงอย่างเดียวไม่เพียงพอจะสรุปว่าเป็น router และไม่สามารถระบุ MacBook/PC/iPhone จาก IP อย่างเดียวได้"],
+      ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นได้จากตาราง ARP ใน LAN เดียวกันเท่านั้น; หากผ่าน router อาจเป็น MAC ของ next hop และ OUI ไม่ยืนยันชนิดหรือรุ่นอุปกรณ์"], ["บทบาท/ชนิด", devType(d.device_type), "เป็นเพียงข้อสันนิษฐานจากบริการหรือ LAN protocol ไม่ยืนยัน ownership, hardware หรือ OS; IP ลงท้าย .1/.254 เพียงอย่างเดียวไม่เพียงพอจะสรุปว่าเป็น router"],
+      ["ความเชื่อมั่นชนิด", CONF[d.device_type_confidence] || d.device_type_confidence || "ต่ำ", "ค่าความเชื่อมั่นเป็น heuristic ไม่ใช่การยืนยันอุปกรณ์"], ["แหล่งหลักฐาน", d.device_type_source || "fast-scan service role", "เช่น fast scan, NetBIOS, mDNS หรือ SSDP"], ["หลักฐาน fingerprint", (d.device_type_evidence || []).join(" · ") || "ไม่มีหลักฐานระบุชนิด", "ข้อมูลที่สังเกตได้ถูกจำกัดและอาจบ่งชี้เพียงบทบาท/ระบบที่เข้ากันได้"], ["สถานะ LAN fingerprint", d.lan_fingerprint_status || "not_requested", "not_requested หมายถึงไม่ได้เลือกใช้; completed_no_match หมายถึงไม่มีข้อมูลตอบกลับที่ระบุชนิดได้"],
       ["Runtime", runtimeOf(d) || "—", "ซอฟต์แวร์ที่ให้บริการเว็บ เช่น PHP, Node.js/Express หรือเว็บเซิร์ฟเวอร์ (nginx/Apache)"], ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
       ["CMS", d.cms || "—", ""], ["พอร์ตเว็บ", d.open_ports.join(", ") || "—", "พอร์ตที่ตอบกลับเป็นเว็บจริงระหว่างการสแกน"],
       ["เวลาตอบสนอง", d.latency_ms != null ? `${num(d.latency_ms)} ms` : "—", "เวลาที่เครื่องใช้ตอบกลับ ยิ่งน้อยยิ่งเร็ว"]];
@@ -1296,8 +1401,9 @@ function paintTabs() {
 }
 function downloadCsv(devices, name) {
   const cell = (v) => { let s = String(v ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replace(/"/g, '""')}"`; };
-  const head = ["ip", "hostname", "mac", "device_type", "service", "php_version", "cms", "open_ports", "open_services", "latency_ms", "severity", "assessment", "cve"];
-  const rows = devices.map((d) => [d.ip, d.hostname, d.mac, d.device_type, d.service, d.php_version, d.cms, d.open_ports.join(" "),
+  const head = ["ip", "hostname", "mac", "device_type", "device_type_confidence", "device_type_source", "device_type_evidence", "lan_fingerprint_status", "service", "php_version", "cms", "open_ports", "open_services", "latency_ms", "severity", "assessment", "cve"];
+  const rows = devices.map((d) => [d.ip, d.hostname, d.mac, d.device_type, d.device_type_confidence, d.device_type_source,
+    (d.device_type_evidence || []).join(" | "), d.lan_fingerprint_status, d.service, d.php_version, d.cms, d.open_ports.join(" "),
     services(d).map((x) => `${x.port}/${x.name}`).join(" "), d.latency_ms, d.severity, d.assessment, [...new Set(d.findings.flatMap((f) => f.cve))].sort().join(" ")]);
   const csv = "﻿" + [head, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
   const a = document.createElement("a");
