@@ -713,7 +713,7 @@ function renderAdvPanel() {
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
     </div>
     ${S.mode2 === "fast" ? `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:14px;background:${cfg.rce_verify_enabled ? "var(--soft)" : "#F7F7FA"}">
-      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ยืนยันใช้ RCE Verify แบบ active หลัง fast scan <span style="font-weight:400;color:var(--muted)">— ตรวจทุก HTTP(S) endpoint ที่ fast scan ยืนยัน ไม่สุ่มเลือก; เพดาน ${num(cfg.rce_verify_max_endpoints || 50)} endpoints</span></span></label>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ยืนยันใช้ RCE Verify แบบ active ระหว่าง fast scan <span style="font-weight:400;color:var(--muted)">— เริ่มเมื่อ probe ยืนยัน endpoint แล้วส่งตรวจทุก endpoint โดยไม่สุ่มเลือก; ${Number(cfg.rce_verify_max_endpoints) > 0 ? `เพดาน ${num(cfg.rce_verify_max_endpoints)} endpoints` : "ไม่จำกัดจำนวน endpoint"}</span></span></label>
       ${cfg.rce_verify_enabled ? "" : `<p class="od" style="margin-top:6px">ผู้ดูแลต้องเปิด <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> ฝั่งเซิร์ฟเวอร์ก่อน</p>`}
     </div>` : ""}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
@@ -821,7 +821,7 @@ function updateScan(modeChanged) {
     ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
     ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
     ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "fast" && S.rceVerify ? "กรอกแบบฟอร์มก่อนเริ่ม แล้ว RCE Verify แบบ active จะต่อหลัง fast scan (ใช้เวลาเพิ่มตาม timeout)" : "สแกนปกติแบบอ่านอย่างเดียว"}</div></div>`;
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "fast" && S.rceVerify ? "กรอกแบบฟอร์มก่อนเริ่ม แล้ว RCE Verify จะเริ่มเป็น batch ทันทีที่ probe ยืนยัน endpoint ระหว่าง fast scan" : "สแกนปกติแบบอ่านอย่างเดียว"}</div></div>`;
   $("#go").disabled = !ok || S.rceVerify;
 }
 
@@ -836,7 +836,7 @@ async function viewScanning([id], alive) {
     ["หาเครื่องออนไลน์", "ลองเชื่อมต่อทุกที่อยู่ตามชุดพอร์ตที่เลือก เพื่อดูว่าเครื่องไหนเปิดใช้งานอยู่"],
     ["ตรวจพอร์ต เว็บ และช่องโหว่", "ดูว่าเครื่องที่ออนไลน์เปิดบริการอะไร ตรวจหาช่องโหว่ PHP2Shell และสำรวจรายละเอียดตามโหมดที่เลือก"],
   ];
-  if (s.rce_verify_requested) STEPS.push(["RCE Verify", "เริ่ม active verification ต่อทันทีหลัง fast scan โดยใช้ URL และค่าที่ผู้ปฏิบัติงานยืนยันไว้ก่อนเริ่ม"]);
+  if (s.rce_verify_requested) STEPS.push(["RCE Verify", "เริ่ม active verification ทันทีที่ fast scan ยืนยัน endpoint และทำงานเป็น batch ระหว่างตรวจเครื่องอื่น"]);
   render(`<div class="app thin" style="text-align:center">
     <div class="in1">
       <span class="badge b-blue" style="font-size:13px;padding:6px 12px"><span class="live"></span>${s.demo_scenario ? "ตัวอย่าง · ข้อมูลจำลอง" : "กำลังทำงาน"}</span>
@@ -891,16 +891,25 @@ async function viewScanning([id], alive) {
     const todoEl = $("#sc-todo"), doneEl = $("#sc-done"), headEl = $("#sc-head"), ringEl = $("#sc-ring"), pctEl = $("#sc-pct");
     if (!todoEl || !doneEl || !ringEl || !pctEl) return;
     const p = s.progress || {}, total = Math.max(1, p.total_ips || 1);
-    const rce = p.phase === "rce_verify";
+    const rceRequested = !!s.rce_verify_requested;
+    const scanComplete = !!p.fast_scan_complete;
+    const rceStarted = !!p.rce_verify_started;
+    const rceDone = !!p.rce_verify_done;
     const inspect = ["inspect", "cybers_rmutl", "traceroute"].includes(p.phase);
     const frac1 = Math.min(1, (p.probed || 0) / total), frac2 = inspect ? (p.to_inspect ? (p.inspected || 0) / p.to_inspect : 1) : 0;
     const rceFrac = p.rce_verify_total ? Math.min(1, (p.rce_verify_completed || 0) / p.rce_verify_total) : 0;
-    const pct = rce ? 95 + Math.round(rceFrac * 5) : inspect ? 55 + Math.round(frac2 * 40) : Math.round(frac1 * 55);
-    const stage = rce ? 3 : !p.phase ? 0 : inspect ? 2 : 1;
-    const fills = rce ? [1, 1, 1, Math.max(0.15, rceFrac)] : [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
-    $$("[id^=seg]").forEach((b, i) => b.style.setProperty("--f", `${Math.round((fills[i] || 0) * 100)}%`));
+    const pct = scanComplete ? (rceRequested ? (rceDone ? 100 : 95 + Math.round(rceFrac * 5)) : 100)
+      : inspect ? Math.min(94, 55 + Math.round(frac2 * 35) + (rceStarted ? Math.round(rceFrac * 4) : 0))
+        : Math.round(frac1 * 55);
+    const stage = scanComplete ? (rceRequested ? 3 : 2) : !p.phase ? 0 : inspect ? 2 : 1;
+    const fills = [p.phase ? 1 : 0.5, inspect || scanComplete ? 1 : frac1,
+      scanComplete ? 1 : frac2, rceDone ? 1 : rceStarted ? Math.max(0.15, rceFrac) : 0];
+    $$(`[id^=seg]`).forEach((b, i) => b.style.setProperty("--f", `${Math.round((fills[i] || 0) * 100)}%`));
     const steps = STEPS.map(([t, h], i) => {
-      const st = i < stage ? "done" : i === stage ? "on" : "wait";
+      const st = i === 0 ? (p.phase ? "done" : "on")
+        : i === 1 ? (scanComplete || inspect ? "done" : p.phase ? "on" : "wait")
+          : i === 2 ? (scanComplete ? "done" : inspect ? "on" : "wait")
+            : rceDone ? "done" : rceStarted ? "on" : "wait";
       return `<li style="display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:center;padding:8px 10px;border-radius:12px;background:${st === "on" ? "var(--soft)" : "transparent"}">
         <span style="width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:${st === "wait" ? "var(--muted)" : "#fff"};background:${st === "wait" ? "#F0F2F8" : "var(--grad)"}">${st === "done" ? "✓" : i + 1}</span>
         <span style="min-width:0"><span class="ot">${t}</span><span class="od">${h}</span></span><span class="badge ${st === "done" ? "b-ok" : st === "on" ? "b-blue" : "b-grey"}">${st === "done" ? "เสร็จ" : st === "on" ? "กำลังทำ" : "รอคิว"}</span></li>`;
@@ -919,7 +928,16 @@ async function viewScanning([id], alive) {
     ringEl.style.strokeDasharray = `${pct} 100`;
     pctEl.textContent = `${pct}%`;
     const stepLabel = (STEPS[stage] || STEPS[0])[0];
-    const phase = stopping ? "กำลังหยุด…" : `${rce ? `ขั้นที่ 4 จาก 4 · RCE Verify ${num(p.rce_verify_completed)}/${num(p.rce_verify_total)} endpoints · batch ปัจจุบัน ${num(p.rce_verify_batch_size)} · active ${num(p.rce_verify_active)}` : inspect ? `ขั้นที่ 3 จาก ${STEPS.length} · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก ${STEPS.length} · ${stepLabel}`} ${tip("batch size ปรับตามหน่วยความจำที่ว่าง; หากไม่พอ ระบบจะไม่เริ่ม batch ใหม่")}`;
+    const rceProgress = rceRequested && rceStarted
+      ? p.rce_verify_total === 0 && !rceDone
+        ? "RCE Verify พร้อมเริ่มเมื่อ probe ยืนยัน endpoint แรก"
+        : `RCE Verify ${num(p.rce_verify_completed)}/${num(p.rce_verify_total)} endpoint${rceDone ? " · เสร็จแล้ว" : ` · batch ${num(p.rce_verify_batch_size)} · active ${num(p.rce_verify_active)}`}${p.rce_verify_limit_reached ? " · ถึงเพดาน endpoint" : ""}`
+      : "RCE Verify รอ fast scan";
+    const phase = stopping ? "กำลังหยุด…" : scanComplete
+      ? `${rceRequested ? `ขั้นที่ 4 จาก 4 · ${rceProgress}` : "สแกนเสร็จแล้ว"}`
+      : inspect
+        ? `ขั้นที่ 3 จาก ${STEPS.length} · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)${rceRequested ? ` · ${rceProgress}` : ""}`
+        : `ขั้นที่ ${stage + 1} จาก ${STEPS.length} · ${stepLabel}${rceRequested && rceStarted ? ` · ${rceProgress}` : ""}`;
     const phaseEl = $("#sc-phase");
     if (phase !== lastPhase && phaseEl) { phaseEl.innerHTML = phase; lastPhase = phase; }
     const cp = $("#c-probed"), ct = $("#c-total"), co = $("#c-online"), cr = $("#c-risks"), cn = $("#sc-note");
@@ -1139,11 +1157,15 @@ function showRceVerifyResult(result) {
     <div class="modal-foot"><button type="button" class="btn btn-g" data-close>ปิด</button></div>`, "ผล RCE Verify");
 }
 function openRceVerifyForm(scanBody) {
-  const submitLabel = "เริ่ม fast scan และต่อ RCE Verify";
+  const submitLabel = "เริ่ม fast scan + RCE Verify พร้อมกัน";
+  const endpointCap = Number(cfg.rce_verify_max_endpoints) || 0;
+  const endpointPolicy = endpointCap > 0
+    ? `เพดานที่ผู้ดูแลตั้งไว้ ${num(endpointCap)} endpoints · ส่วนที่เกินจะไม่เริ่มตรวจและจะแสดงจำนวนชัดเจน`
+    : "ตรวจทุก endpoint ที่ fast scan ยืนยัน · คิวมีขนาดจำกัดเพื่อคุม RAM";
   let launched = false;
   const m = openModal(`<h2>ตั้งค่า fast scan + RCE Verify</h2>
-    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>การเลือกนี้เป็นการยืนยัน active test หนึ่งครั้งสำหรับงานนี้ หลัง fast scan เสร็จ ระบบจะตรวจทุก HTTP(S) endpoint ที่ตอบ probe สำเร็จ โดยไม่สุ่มและไม่ตัดรายการเงียบ ๆ ปลายทางจะถูก pin กับ IP/origin ที่ยืนยันจาก fast scan; ใช้เฉพาะระบบที่หน่วยงานได้รับอนุญาต</span></p>
-    <p class="notice b-blue" style="margin-top:10px">${ic("shield", 18)}<span>เพดาน ${num(cfg.rce_verify_max_endpoints || 50)} endpoints ต่อ job · ทำงานเป็น batch โดยปรับ concurrency ตามหน่วยความจำ · ถ้าเกินเพดานจะไม่เริ่ม active request ใด ๆ</span></p>
+    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>การเลือกนี้เป็นการยืนยัน active test หนึ่งครั้งสำหรับงานนี้ เมื่อ fast scan ยืนยัน HTTP(S) endpoint แรก RCE Verify จะเริ่มทันทีเป็น batch ระหว่างที่ scan เครื่องอื่นต่อ โดยไม่สุ่มเลือก ปลายทางจะถูก pin กับ IP/origin ที่ยืนยันจาก fast scan; ใช้เฉพาะระบบที่หน่วยงานได้รับอนุญาต</span></p>
+    <p class="notice b-blue" style="margin-top:10px">${ic("shield", 18)}<span>${endpointPolicy} · concurrency ปรับตามหน่วยความจำ</span></p>
     <p class="lead">Bearer token ใช้ยืนยันคำขอครั้งนี้เท่านั้นและไม่ถูกบันทึกใน browser หรือ scan job</p>
     <form id="rce-form" style="display:grid;gap:10px;margin-top:14px">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">

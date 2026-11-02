@@ -87,9 +87,9 @@ Chain ใช้กติกา scope เดียวกับระบบหล�
 โดย API ส่ง ownership override ของ toolkit หลังผ่าน Bearer authentication และการยืนยันของ operator
 เนื่องจาก API ไม่สามารถพิสูจน์กรรมสิทธิ์ทางเทคนิคได้ จึงควรจำกัด token/route ไว้กับผู้ได้รับอนุญาต
 
-ในหน้าเว็บ ให้เปิด **ขั้นสูง → โหมดรวดเร็ว** แล้วเลือก **ยืนยันใช้ RCE Verify แบบ active หลัง fast scan**; popup เป็นจุดยืนยันและกรอก Bearer token เพียงครั้งเดียว ก่อนเริ่ม scan job เดียว ระบบจะทำ fast scan หนึ่งรอบ แล้วนำ endpoint HTTP(S) ทุกตัวที่ตอบ probe สำเร็จเข้าสู่ RCE Verify โดยไม่สุ่มเลือก ทั้ง scheme, hostname, IP และ port ถูกเก็บจาก probe จริงและใช้สร้างรายการเป้าหมาย
+ในหน้าเว็บ ให้เปิด **ขั้นสูง → โหมดรวดเร็ว** แล้วเลือก **ยืนยันใช้ RCE Verify แบบ active ระหว่าง fast scan**; popup เป็นจุดยืนยันและกรอก Bearer token เพียงครั้งเดียว ก่อนเริ่ม scan job เดียว ทันทีที่ HTTP probe ยืนยัน endpoint แรก ระบบจะส่ง endpoint นั้นเข้า RCE Verify ระหว่างที่ fast scan ยังตรวจเครื่องอื่นต่อ และส่ง endpoint ที่ยืนยันเพิ่มเข้าคิวต่อเนื่อง ทั้ง scheme, hostname, IP และ port ถูกเก็บจาก probe จริงและใช้สร้างรายการเป้าหมาย
 
-batch ปรับจำนวน worker ก่อนเริ่มแต่ละ wave จากหน่วยความจำที่ว่าง (รวม cgroup limit เมื่อมี), ใช้ค่า RSS สูงสุดที่วัดได้จาก worker เพื่อเพิ่มประมาณการหน่วยความจำของ wave ถัดไป และมีเพดาน concurrency รวมต่อ process สูงสุด 8 (ค่าเริ่มต้น 2) หากไม่มี memory telemetry จะทำงานทีละ endpoint; หากหน่วยความจำเหลือน้อยเกิน reserve จะไม่เริ่ม wave ถัดไป แต่แสดง endpoint ที่ยังไม่เริ่มอย่างชัดเจน ไม่มีการตัดหรือสุ่มรายการโดยเงียบ ๆ ค่าเริ่มต้นยอมรับไม่เกิน 50 endpoint ต่อ job; ถ้าเกินเพดาน จะปฏิเสธ batch ก่อนส่ง active request ใด ๆ ให้ลดขอบเขต fast scan หรือปรับเพดานโดยผู้ดูแล
+batch ปรับจำนวน worker ก่อนเริ่มแต่ละ wave จากหน่วยความจำที่ว่าง (รวม cgroup limit เมื่อมี), ใช้ค่า RSS สูงสุดที่วัดได้จาก worker เพื่อเพิ่มประมาณการหน่วยความจำของ wave ถัดไป และมีเพดาน concurrency รวมต่อ process สูงสุด 8 (ค่าเริ่มต้น 2) หากไม่มี memory telemetry จะทำงานทีละ endpoint; หากหน่วยความจำเหลือน้อยเกิน reserve จะไม่เริ่ม wave ถัดไป แต่แสดง endpoint ที่ยังไม่เริ่มอย่างชัดเจน ค่าเริ่มต้นตรวจทุก endpoint ที่ fast scan ยืนยัน โดยใช้คิว bounded และ backpressure เพื่อไม่สะสมงานใน RAM; เพดาน endpoint เป็นตัวเลือกสำหรับผู้ดูแล (`0` = ไม่จำกัด) หากตั้งเพดานและพบจำนวนเกิน ระบบจะไม่ส่ง endpoint ที่เกินเข้า active queue และรายงานผล `PARTIAL_ENDPOINT_LIMIT` พร้อมจำนวนที่ไม่ได้เริ่มตรวจ ส่วน batch ที่เริ่มไปแล้วจะปล่อยให้จบ ไม่มีการสุ่มหรือซ่อนรายการที่ไม่ได้ตรวจ
 
 เพื่อคง scope ตามผล fast scan batch จะ pin DNS ของ hostname ไปยัง IP ที่ probe ยืนยัน, ยอมให้ request/redirect อยู่ใน origin เดิม (scheme + host + port) เท่านั้น และไม่รับ custom LFI/session URL ในโหมด batch หากมี HTTP→HTTPS หรือเปลี่ยน port ระบบจะไม่ตาม redirect ข้าม origin; endpoint HTTPS/port นั้นจะถูกตรวจแยกเมื่อ fast scan ยืนยันว่ามีอยู่ การปิด popup จะยกเลิกการเลือก RCE และไม่มีปุ่มปลดล็อกหรือแบบฟอร์มยืนยันซ้ำในหน้าผลการสแกน
 
@@ -157,7 +157,7 @@ batch ปรับจำนวน worker ก่อนเริ่มแต่ล
   → เทียบเวอร์ชัน PHP กับรุ่นที่แพตช์ → ระดับความรุนแรง + สิ่งที่ควรทำ
 ```
 
-เมื่อเลือก RCE Verify ในหน้าเว็บ แบบฟอร์มและการยืนยัน active จะแสดงก่อนเริ่ม จากนั้นคำขอเดียวสร้าง fast-scan job; เมื่อ fast scan เสร็จ job เดิมจะเรียก RCE Verify ต่อกับ URL/พอร์ตที่อยู่ในผลสแกน โดยไม่เริ่ม full scan ซ้ำ Bearer token ส่งผ่าน `Authorization` header และไม่ถูกเก็บใน job; ถ้า URL/พอร์ตไม่ปรากฏในผล fast scan ระบบจะข้าม active request
+เมื่อเลือก RCE Verify ในหน้าเว็บ แบบฟอร์มและการยืนยัน active จะแสดงก่อนเริ่ม จากนั้นคำขอเดียวสร้าง fast-scan job; ระหว่าง fast scan เมื่อ probe ยืนยัน URL/พอร์ต ระบบจะส่ง endpoint เข้า RCE Verify ทันทีเป็น batch โดยไม่รอให้การตรวจ passive ทั้งหมดเสร็จและไม่เริ่ม fast scan ซ้ำ Bearer token ส่งผ่าน `Authorization` header และไม่ถูกเก็บใน job
 
 ### การกรองผลปลอม (middlebox)
 
@@ -187,7 +187,7 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 | `THSCAN_RCE_VERIFY_ENABLED` | `0` | เปิด API สำหรับ active RCE Verify โดยชัดแจ้ง |
 | `THSCAN_RCE_VERIFY_TOKEN` | *(ไม่มี)* | Bearer secret แบบ random อย่างน้อย 32 ตัวอักษร |
 | `THSCAN_RCE_VERIFY_TOTAL_TIMEOUT` | `180` | wall-clock deadline ของ RCE Verify subprocess (วินาที) |
-| `THSCAN_RCE_VERIFY_MAX_ENDPOINTS` | `50` | เพดาน endpoint ต่อ batch job; เกินแล้วปฏิเสธก่อนเริ่ม active request (1–1000) |
+| `THSCAN_RCE_VERIFY_MAX_ENDPOINTS` | `0` | เพดาน endpoint แบบเลือกได้ (`0` = ตรวจทั้งหมด; `1–100000` = cap) |
 | `THSCAN_RCE_VERIFY_MAX_WORKERS` | `2` | concurrency ceiling; ปรับ batch size ตาม memory อัตโนมัติ (1–8) |
 | `THSCAN_RCE_VERIFY_MEMORY_RESERVE_MB` | `1024` | RAM ที่สงวนไว้ไม่ให้ RCE worker ใช้ |
 | `THSCAN_RCE_VERIFY_WORKER_MEMORY_MB` | `512` | ประมาณการ RAM ต่อ worker เริ่มต้น; ปรับขึ้นตาม RSS สูงสุดที่วัดได้ |

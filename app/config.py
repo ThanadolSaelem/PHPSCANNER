@@ -89,7 +89,7 @@ class Settings:
     rce_chain_timeout_s: int = _env_int("THSCAN_RCE_CHAIN_TIMEOUT", 90)
     rce_verify_enabled: bool = _env_bool("THSCAN_RCE_VERIFY_ENABLED", False)
     rce_verify_total_timeout_s: int = _env_int("THSCAN_RCE_VERIFY_TOTAL_TIMEOUT", 180)
-    rce_verify_max_endpoints: int = _env_int("THSCAN_RCE_VERIFY_MAX_ENDPOINTS", 50)
+    rce_verify_max_endpoints: int = _env_int("THSCAN_RCE_VERIFY_MAX_ENDPOINTS", 0)
     rce_verify_max_workers: int = _env_int("THSCAN_RCE_VERIFY_MAX_WORKERS", 2)
     rce_verify_memory_reserve_mb: int = _env_int("THSCAN_RCE_VERIFY_MEMORY_RESERVE_MB", 1024)
     rce_verify_worker_memory_mb: int = _env_int("THSCAN_RCE_VERIFY_WORKER_MEMORY_MB", 512)

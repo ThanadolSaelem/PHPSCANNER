@@ -5,58 +5,23 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import os
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Awaitable, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
 from ..config import Settings
 from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity, WebEndpoint
 from . import chain_runner, demo_scenarios, discovery, dns_resolver, http_probe, nmap_scan, port_scanner, ports, vuln_rules
 from .ip_utils import expand_targets, label_targets
-from .resource_budget import available_memory_bytes, choose_batch_size, MAX_RCE_WORKERS
+from . import rce_batch
+from .rce_batch import RceVerifyBatchStream
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _rce_endpoint_inventory(devices: List[Device], limit: int) -> tuple[List[dict], bool]:
-    """Return distinct confirmed HTTP endpoints, stopping at limit+1 to reject overflow."""
-    out: List[dict] = []
-    seen: set[tuple[str, str, str, int]] = set()
-    cap = max(1, int(limit))
-    for device in devices:
-        opened = set(device.open_ports)
-        for endpoint in device.web_endpoints:
-            scheme = endpoint.scheme.lower()
-            host = (endpoint.hostname or endpoint.ip).strip().rstrip(".")
-            port = int(endpoint.port)
-            if endpoint.ip != device.ip or port not in opened:
-                continue
-            if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
-                continue
-            try:
-                parsed_ip = ipaddress.ip_address(host)
-                url_host = f"[{host}]" if parsed_ip.version == 6 else host
-            except ValueError:
-                url_host = host
-            key = (endpoint.ip.lower(), scheme, host.lower(), port)
-            if key in seen:
-                continue
-            seen.add(key)
-            target = f"{scheme}://{url_host}:{port}/"
-            out.append({
-                "target": target, "ip": endpoint.ip, "hostname": host,
-                "port": port, "scheme": scheme,
-            })
-            if len(out) > cap:
-                return out, True
-    return out, False
 
 
 class ScanEngine:
@@ -103,11 +68,36 @@ class ScanEngine:
     async def _run_pipeline(self, job: ScanJob, cancel: asyncio.Event) -> None:
         if job.request.demo_scenario:
             await self._run_demo(job, cancel)
-        else:
-            await self._run(job, cancel)
-        if cancel.is_set() or job.request.rce_verify is None or job.request.demo_scenario:
+            job.progress.fast_scan_complete = not cancel.is_set()
             return
+
+        request = job.request.rce_verify
+        if request is not None and request.all_scanned_targets:
+            stream = RceVerifyBatchStream(job, self.settings, request, cancel)
+            worker = asyncio.create_task(stream.run())
+            try:
+                await self._run(job, cancel, on_web_endpoint=stream.submit)
+            except BaseException:
+                if not worker.done():
+                    await stream.finish()
+                    worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
+            job.progress.fast_scan_complete = not cancel.is_set()
+            if job.progress.fast_scan_complete and stream.discovered:
+                job.progress.phase = "rce_verify"
+            if not worker.done():
+                await stream.finish()
+            await worker
+            return
+
+        await self._run(job, cancel)
+        job.progress.fast_scan_complete = not cancel.is_set()
+        if cancel.is_set() or request is None:
+            return
+        job.progress.rce_verify_started = True
         await self._run_rce_verify(job, cancel)
+        job.progress.rce_verify_done = True
 
     async def _run_rce_verify(self, job: ScanJob, cancel: asyncio.Event) -> None:
         request = job.request.rce_verify
@@ -178,151 +168,23 @@ class ScanEngine:
         job.rce_verify_result = result
 
     async def _run_rce_verify_batch(self, job: ScanJob, request, cancel: asyncio.Event) -> None:
-        """Verify every unique fast-scan HTTP endpoint in adaptive bounded waves."""
+        """Fallback for direct callers; the normal pipeline uses the live endpoint stream."""
         job.progress.phase = "rce_verify"
-        endpoint_limit = max(1, min(1000, int(self.settings.rce_verify_max_endpoints)))
-        endpoints, overflow = _rce_endpoint_inventory(job.devices, endpoint_limit)
-        if overflow:
-            job.rce_verify_result = {
-                "ran": False, "mode": "batch", "verdict": "REJECTED_LIMIT",
-                "summary": {"endpoint_limit": endpoint_limit}, "results": [],
-                "total_targets": endpoint_limit + 1, "completed_targets": 0,
-                "endpoint_limit": endpoint_limit, "evidence_dir": None,
-                "error": f"พบ endpoint อย่างน้อย {endpoint_limit + 1} รายการ; เกินเพดาน {endpoint_limit} รายการ จึงยังไม่ส่ง active request ไม่มีการตัดหรือสุ่มเป้าหมาย",
-            }
-            job.progress.rce_verify_total = endpoint_limit + 1
-            return
-        if not endpoints:
-            job.rce_verify_result = {
-                "ran": False, "mode": "batch", "verdict": "SKIPPED",
-                "summary": {}, "results": [], "total_targets": 0,
-                "completed_targets": 0, "evidence_dir": None,
-                "error": "fast scan ไม่พบ HTTP(S) endpoint ที่ยืนยันด้วย successful probe จึงไม่มี active request",
-            }
-            return
-
-        total = len(endpoints)
-        job.progress.rce_verify_total = total
-        job.progress.rce_verify_completed = 0
-        job.progress.rce_verify_active = 0
-        job.progress.rce_verify_batch_size = 0
-        rows: List[Optional[dict]] = [None] * total
-        configured_workers = max(1, min(MAX_RCE_WORKERS, int(self.settings.rce_verify_max_workers)))
-        reserve_mb = max(128, min(16384, int(self.settings.rce_verify_memory_reserve_mb)))
-        estimated_worker_mb = max(128, min(4096, int(self.settings.rce_verify_worker_memory_mb)))
-        batch_deadline = time.monotonic() + max(60, min(14400, int(self.settings.rce_verify_batch_timeout_s)))
-        next_index = 0
-        batch_count = 0
-        max_parallel_used = 0
-
-        def make_result() -> dict:
-            completed = sum(1 for row in rows if row is not None and row.get("verdict") not in {
-                "DEFERRED_RESOURCE_LIMIT", "DEFERRED_BATCH_TIMEOUT", "CANCELLED_NOT_STARTED"
-            })
-            has_deferred = any(row is not None and str(row.get("verdict", "")).startswith(("DEFERRED_", "CANCELLED_")) for row in rows)
-            confirmed = any(row is not None and row.get("verdict") in {"RCE_CONFIRMED", "CANARY_CONFIRMED"} for row in rows)
-            verdict = "RCE_CONFIRMED" if confirmed else ("PARTIAL" if has_deferred else "BATCH_COMPLETED")
-            return {
-                "ran": any(row is not None and row.get("ran") for row in rows),
-                "mode": "batch", "verdict": verdict, "summary": {},
-                "total_targets": total, "completed_targets": completed,
-                "batch_count": batch_count, "max_parallel": max_parallel_used,
-                "results": [row for row in rows if row is not None],
-                "endpoint_limit": endpoint_limit, "evidence_dir": None,
-            }
-
-        async def verify_one(index: int) -> tuple[int, dict]:
-            endpoint = endpoints[index]
-            evidence_dir = os.path.join(
-                self.settings.data_dir, "rce-verify", job.id, f"{index + 1:04d}"
-            )
-            try:
-                result = await chain_runner.run_rce_verify_target(
-                    endpoint["target"], self.settings, evidence_dir=evidence_dir,
-                    operator=request.operator, timeout=request.timeout,
-                    no_verify_ssl=request.no_verify_ssl, pinned_ip=endpoint["ip"],
-                    max_concurrency=configured_workers,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # a target failure must not abort the remaining inventory
-                result = {
-                    "ran": False, "verdict": "ERROR", "summary": {},
-                    "evidence_dir": None, "evidence_files": [],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            result["target"] = endpoint["target"]
-            result.update({k: endpoint[k] for k in ("ip", "hostname", "port", "scheme")})
-            returned_dir = result.get("evidence_dir")
-            if returned_dir:
-                try:
-                    data_root = Path(self.settings.data_dir).resolve()
-                    expected = Path(evidence_dir).resolve()
-                    evidence_path = Path(returned_dir).resolve()
-                    if evidence_path != expected or not evidence_path.is_relative_to(data_root):
-                        raise ValueError("toolkit returned an invalid evidence path")
-                    result["evidence_dir"] = os.path.relpath(evidence_path, data_root)
-                except (OSError, TypeError, ValueError):
-                    result["evidence_dir"] = None
-                    result["error"] = "toolkit returned an invalid evidence path"
-                    result["verdict"] = "ERROR"
-            return index, result
-
-        while next_index < total:
-            if cancel.is_set():
-                break
-            if time.monotonic() >= batch_deadline:
-                break
-            batch_size = choose_batch_size(
-                total - next_index,
-                available_bytes=available_memory_bytes(),
-                max_workers=configured_workers,
-                reserve_mb=reserve_mb,
-                worker_memory_mb=estimated_worker_mb,
-            )
-            if batch_size <= 0:
-                break
-            batch = list(range(next_index, min(total, next_index + batch_size)))
-            job.progress.rce_verify_active = len(batch)
-            job.progress.rce_verify_batch_size = len(batch)
-            max_parallel_used = max(max_parallel_used, len(batch))
-            batch_count += 1
-            completed_batch = await asyncio.gather(*(verify_one(i) for i in batch))
-            peak_rss = 0
-            for index, result in completed_batch:
-                rows[index] = result
-                peak_rss = max(peak_rss, int(result.get("peak_rss_bytes") or 0))
-            if peak_rss:
-                estimated_worker_mb = max(
-                    estimated_worker_mb,
-                    min(4096, int((peak_rss * 1.5) / (1024 * 1024)) + 1),
-                )
-            next_index += len(batch)
-            job.progress.rce_verify_completed = next_index
-            job.progress.rce_verify_active = 0
-            job.rce_verify_result = make_result()
-
-        if next_index < total:
-            if cancel.is_set():
-                reason = "CANCELLED_NOT_STARTED"
-                explanation = "งานถูกยกเลิกก่อนเริ่ม endpoint นี้"
-            elif time.monotonic() >= batch_deadline:
-                reason = "DEFERRED_BATCH_TIMEOUT"
-                explanation = "ถึงเพดานเวลารวมของ batch ก่อนเริ่ม endpoint นี้"
-            else:
-                reason = "DEFERRED_RESOURCE_LIMIT"
-                explanation = "หน่วยความจำที่ว่างไม่พอสำหรับเริ่ม batch ถัดไป; ไม่มี active request ถูกส่งไปยัง endpoint นี้"
-            for index in range(next_index, total):
-                endpoint = endpoints[index]
-                rows[index] = {
-                    "ran": False, "target": endpoint["target"],
-                    **{k: endpoint[k] for k in ("ip", "hostname", "port", "scheme")},
-                    "verdict": reason, "summary": {}, "evidence_dir": None,
-                    "evidence_files": [], "error": explanation,
-                }
-        job.progress.rce_verify_active = 0
-        job.progress.rce_verify_completed = next_index
-        job.rce_verify_result = make_result()
+        stream = RceVerifyBatchStream(job, self.settings, request, cancel)
+        worker = asyncio.create_task(stream.run())
+        try:
+            for device in job.devices:
+                for endpoint in device.web_endpoints:
+                    await stream.submit(endpoint)
+        except BaseException:
+            if not worker.done():
+                await stream.finish()
+                worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+            raise
+        if not worker.done():
+            await stream.finish()
+        await worker
 
     @staticmethod
     def _label(req) -> str:
@@ -365,7 +227,12 @@ class ScanEngine:
         job.progress.online = len(devices)
         job.progress.risks = sum(1 for d in devices if d.severity != Severity.safe)
 
-    async def _run(self, job: ScanJob, cancel: asyncio.Event) -> None:
+    async def _run(
+        self,
+        job: ScanJob,
+        cancel: asyncio.Event,
+        on_web_endpoint: Optional[Callable[[WebEndpoint], Awaitable[None]]] = None,
+    ) -> None:
         req = job.request
         s = self.settings
         concurrency = min(req.concurrency or s.max_concurrency, s.max_concurrency)
@@ -527,11 +394,14 @@ class ScanEngine:
                         if port in canary_fp and wr.fingerprint == canary_fp[port]:
                             continue
                         web_open.append(port)
-                        web_endpoints.append(WebEndpoint(
+                        web_endpoint = WebEndpoint(
                             ip=ip, hostname=wr.hostname or site_host or ip,
                             port=wr.probe_port or port,
                             scheme=wr.probe_scheme or wr.scheme,
-                        ))
+                        )
+                        web_endpoints.append(web_endpoint)
+                        if on_web_endpoint is not None:
+                            await on_web_endpoint(web_endpoint)
                         php_version = php_version or wr.php_version
                         runtime = runtime or wr.runtime
                         server = server or wr.server

@@ -205,7 +205,7 @@ def test_combined_scan_api_requires_authorization_and_queues_rce_options(monkeyp
     assert "authorization" not in calls["request"].dump_json_dict()
 
 
-def test_engine_chains_batch_after_fast_scan_and_skips_when_no_web_endpoint(monkeypatch, tmp_path):
+def test_engine_streams_batch_during_fast_scan_and_skips_when_no_web_endpoint(monkeypatch, tmp_path):
     import asyncio
     from datetime import datetime, timezone
 
@@ -214,8 +214,12 @@ def test_engine_chains_batch_after_fast_scan_and_skips_when_no_web_endpoint(monk
     from app.scanner import engine as eng
 
     calls = {}
+    scan_active = False
 
-    async def fake_scan(_engine, job, cancel):
+    async def fake_scan(_engine, job, cancel, on_web_endpoint=None):
+        nonlocal scan_active
+        scan_active = True
+        job.progress.phase = "inspect"
         job.devices = [Device(
             ip="192.0.2.10", open_ports=[80],
             web_endpoints=[WebEndpoint(ip="192.0.2.10", hostname="192.0.2.10", port=80, scheme="http")],
@@ -223,10 +227,19 @@ def test_engine_chains_batch_after_fast_scan_and_skips_when_no_web_endpoint(monk
         job.progress.total_ips = 1
         job.progress.probed = 1
         job.progress.to_inspect = 1
+        if on_web_endpoint:
+            for endpoint in job.devices[0].web_endpoints:
+                await on_web_endpoint(endpoint)
+        await asyncio.sleep(0.04)
         job.progress.inspected = 1
+        scan_active = False
 
     async def fake_verify(target, settings, **kwargs):
-        calls.update(target=target, phase=job.progress.phase, **kwargs)
+        calls.update(target=target, phase=job.progress.phase,
+                     fast_scan_complete=job.progress.fast_scan_complete,
+                     rce_started=job.progress.rce_verify_started,
+                     scan_active=scan_active, **kwargs)
+        await asyncio.sleep(0.01)
         return {"ran": True, "target": target, "verdict": "NOT_CONFIRMED",
                 "summary": {}, "evidence_dir": kwargs["evidence_dir"], "evidence_files": []}
 
@@ -244,11 +257,16 @@ def test_engine_chains_batch_after_fast_scan_and_skips_when_no_web_endpoint(monk
     asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
 
     assert job.state.value == "completed", job.error
-    assert calls["phase"] == "rce_verify"
+    assert calls["phase"] == "inspect"
+    assert calls["fast_scan_complete"] is False
+    assert calls["rce_started"] is True
+    assert calls["scan_active"] is True
     assert calls["target"] == "http://192.0.2.10:80/"
     assert calls["pinned_ip"] == "192.0.2.10"
     assert job.rce_verify_result["verdict"] == "BATCH_COMPLETED"
     assert job.rce_verify_result["results"][0]["evidence_dir"] == "rce-verify/rce-job/0001"
+    assert job.progress.fast_scan_complete is True
+    assert job.progress.rce_verify_done is True
 
     calls.clear()
     request = ScanRequest(
@@ -257,7 +275,7 @@ def test_engine_chains_batch_after_fast_scan_and_skips_when_no_web_endpoint(monk
         rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True),
     )
     job = ScanJob(id="skip-job", created_at=datetime.now(timezone.utc), request=request)
-    async def fake_scan_without_web(_engine, scan_job, cancel):
+    async def fake_scan_without_web(_engine, scan_job, cancel, on_web_endpoint=None):
         scan_job.devices = [Device(ip="192.0.2.11", open_ports=[80])]
     monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan_without_web)
     asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
@@ -274,8 +292,13 @@ def test_batch_deduplicates_endpoints_and_adapts_concurrency(monkeypatch, tmp_pa
     from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
     from app.scanner import engine as eng
 
-    async def fake_scan(_engine, scan_job, cancel):
-        return None
+    async def fake_scan(_engine, scan_job, cancel, on_web_endpoint=None):
+        scan_job.progress.phase = "inspect"
+        for device in scan_job.devices:
+            for endpoint in device.web_endpoints:
+                if on_web_endpoint:
+                    await on_web_endpoint(endpoint)
+        await asyncio.sleep(0)
     monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
 
     settings = Settings()
@@ -299,7 +322,7 @@ def test_batch_deduplicates_endpoints_and_adapts_concurrency(monkeypatch, tmp_pa
             WebEndpoint(ip="192.0.2.21", hostname="192.0.2.21", port=8080, scheme="http"),
         ]),
     ]
-    monkeypatch.setattr(eng, "available_memory_bytes", lambda: 2 * 1024**3)
+    monkeypatch.setattr(eng.rce_batch, "available_memory_bytes", lambda: 2 * 1024**3)
     active = 0
     peak_active = 0
     calls = []
@@ -333,7 +356,7 @@ def test_batch_deduplicates_endpoints_and_adapts_concurrency(monkeypatch, tmp_pa
     }
 
 
-def test_batch_endpoint_cap_rejects_before_any_active_request(monkeypatch, tmp_path):
+def test_batch_endpoint_cap_reports_unstarted_overflow_without_silent_truncation(monkeypatch, tmp_path):
     import asyncio
     from datetime import datetime, timezone
 
@@ -341,8 +364,13 @@ def test_batch_endpoint_cap_rejects_before_any_active_request(monkeypatch, tmp_p
     from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
     from app.scanner import engine as eng
 
-    async def fake_scan(_engine, scan_job, cancel):
-        return None
+    async def fake_scan(_engine, scan_job, cancel, on_web_endpoint=None):
+        scan_job.progress.phase = "inspect"
+        for device in scan_job.devices:
+            for endpoint in device.web_endpoints:
+                if on_web_endpoint:
+                    await on_web_endpoint(endpoint)
+        await asyncio.sleep(0)
     monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
 
     settings = Settings()
@@ -359,15 +387,22 @@ def test_batch_endpoint_cap_rejects_before_any_active_request(monkeypatch, tmp_p
     ])]
     calls = []
 
+    monkeypatch.setattr(eng.rce_batch, "available_memory_bytes", lambda: 2 * 1024**3)
+
     async def fake_verify(*args, **kwargs):
         calls.append(args)
+        return {"ran": True, "verdict": "NOT_CONFIRMED", "summary": {},
+                "evidence_dir": kwargs["evidence_dir"], "evidence_files": []}
 
     monkeypatch.setattr(eng.chain_runner, "run_rce_verify_target", fake_verify)
     asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
 
-    assert not calls
-    assert job.rce_verify_result["verdict"] == "REJECTED_LIMIT"
-    assert "ไม่มีการตัดหรือสุ่ม" in job.rce_verify_result["error"]
+    assert len(calls) == 2
+    assert job.rce_verify_result["verdict"] == "PARTIAL_ENDPOINT_LIMIT"
+    assert job.rce_verify_result["total_targets"] == 3
+    assert job.rce_verify_result["completed_targets"] == 2
+    assert job.rce_verify_result["not_run_targets"] == 1
+    assert "ไม่ได้เริ่ม active request" in job.rce_verify_result["error"]
 
 
 def test_batch_stops_before_wave_when_memory_is_below_reserve(monkeypatch, tmp_path):
@@ -378,8 +413,13 @@ def test_batch_stops_before_wave_when_memory_is_below_reserve(monkeypatch, tmp_p
     from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
     from app.scanner import engine as eng
 
-    async def fake_scan(_engine, scan_job, cancel):
-        return None
+    async def fake_scan(_engine, scan_job, cancel, on_web_endpoint=None):
+        scan_job.progress.phase = "inspect"
+        for device in scan_job.devices:
+            for endpoint in device.web_endpoints:
+                if on_web_endpoint:
+                    await on_web_endpoint(endpoint)
+        await asyncio.sleep(0)
     monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
 
     settings = Settings()
@@ -395,7 +435,7 @@ def test_batch_stops_before_wave_when_memory_is_below_reserve(monkeypatch, tmp_p
     job.devices = [Device(ip="192.0.2.40", open_ports=[80], web_endpoints=[
         WebEndpoint(ip="192.0.2.40", hostname="192.0.2.40", port=80, scheme="http"),
     ])]
-    monkeypatch.setattr(eng, "available_memory_bytes", lambda: 900 * 1024**2)
+    monkeypatch.setattr(eng.rce_batch, "available_memory_bytes", lambda: 900 * 1024**2)
     calls = []
 
     async def fake_verify(*args, **kwargs):
@@ -434,3 +474,43 @@ def test_toolkit_keeps_upstream_redirect_behavior():
     assert "allowed_redirect_hosts" not in signature.parameters
     assert "allowed_redirect_ports" not in signature.parameters
     assert not hasattr(toolkit, "_apply_rce_redirect_policy")
+
+
+def test_default_stream_covers_all_endpoints_with_bounded_backpressure(tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.config import Settings
+    from app.models import RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
+    from app.scanner.rce_batch import RceVerifyBatchStream
+
+    async def scenario():
+        settings = Settings()
+        settings.data_dir = str(tmp_path)
+        assert settings.rce_verify_max_endpoints == 0
+        job = ScanJob(
+            id="unlimited-stream", created_at=datetime.now(timezone.utc),
+            request=ScanRequest(
+                targets=["192.0.2.50"], scan_mode="fast",
+                rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True),
+            ),
+        )
+        stream = RceVerifyBatchStream(job, settings, job.request.rce_verify, asyncio.Event())
+        assert stream.endpoint_limit is None
+        assert 8 <= stream.queue.maxsize <= 32
+
+        for port in range(80, 80 + stream.queue.maxsize):
+            await stream.submit(WebEndpoint(
+                ip="192.0.2.50", hostname="site.example", port=port, scheme="http"
+            ))
+        blocked = asyncio.create_task(stream.submit(WebEndpoint(
+            ip="192.0.2.50", hostname="site.example", port=9000, scheme="http"
+        )))
+        await asyncio.sleep(0)
+        assert not blocked.done()
+        assert stream.discovered == stream.queue.maxsize + 1
+        stream.queue.get_nowait()
+        await blocked
+        assert stream.queue.qsize() == stream.queue.maxsize
+
+    asyncio.run(scenario())

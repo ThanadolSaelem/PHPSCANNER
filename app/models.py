@@ -63,7 +63,7 @@ class ScanRequest(CompatBaseModel):
     polite_delay_ms: Optional[int] = None
     note: str = Field("")
     demo_scenario: Optional[str] = Field(None)
-    # optional active verification, authorized at request time and run after fast scan
+    # optional active verification, authorized once before scan and streamed during fast inspection
     rce_verify: Optional[RceVerifyRequest] = None
     # set by the server, never trusted from the client
     site_hosts: Dict[str, str] = Field(default_factory=dict)   # ip -> hostname
@@ -139,6 +139,10 @@ class ScanProgress(CompatBaseModel):
     phase: str = ""        # liveness | inspect
     to_inspect: int = 0    # hosts that answered liveness
     inspected: int = 0
+    fast_scan_complete: bool = False
+    rce_verify_started: bool = False
+    rce_verify_done: bool = False
+    rce_verify_limit_reached: bool = False
     rce_verify_total: int = 0
     rce_verify_completed: int = 0
     rce_verify_active: int = 0
