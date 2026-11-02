@@ -392,8 +392,10 @@ async def run_rce_verify_target(
     session_endpoint: Optional[str] = None,
     timeout: float = 10.0,
     no_verify_ssl: bool = False,
+    pinned_ip: Optional[str] = None,
+    max_concurrency: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Run the bounded toolkit verifier for a scan-validated URL."""
+    """Run the bounded verifier, optionally pinned to a scan-confirmed address."""
     try:
         from . import rce_verify
     except Exception:  # pragma: no cover - optional toolkit/package failure
@@ -411,4 +413,6 @@ async def run_rce_verify_target(
         total_timeout=float(getattr(settings, "rce_verify_total_timeout_s", 180)),
         no_verify_ssl=no_verify_ssl,
         operator=operator,
+        pinned_ip=pinned_ip,
+        max_concurrency=max_concurrency or int(getattr(settings, "rce_verify_max_workers", 2)),
     )

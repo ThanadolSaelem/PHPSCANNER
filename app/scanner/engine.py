@@ -5,21 +5,58 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import urlsplit
 
 from ..config import Settings
-from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity
+from ..models import Confidence, Device, Finding, JobState, RouteHop, ScanJob, ServicePort, Severity, WebEndpoint
 from . import chain_runner, demo_scenarios, discovery, dns_resolver, http_probe, nmap_scan, port_scanner, ports, vuln_rules
 from .ip_utils import expand_targets, label_targets
+from .resource_budget import available_memory_bytes, choose_batch_size, MAX_RCE_WORKERS
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _rce_endpoint_inventory(devices: List[Device], limit: int) -> tuple[List[dict], bool]:
+    """Return distinct confirmed HTTP endpoints, stopping at limit+1 to reject overflow."""
+    out: List[dict] = []
+    seen: set[tuple[str, str, str, int]] = set()
+    cap = max(1, int(limit))
+    for device in devices:
+        opened = set(device.open_ports)
+        for endpoint in device.web_endpoints:
+            scheme = endpoint.scheme.lower()
+            host = (endpoint.hostname or endpoint.ip).strip().rstrip(".")
+            port = int(endpoint.port)
+            if endpoint.ip != device.ip or port not in opened:
+                continue
+            if scheme not in ("http", "https") or not host or not 1 <= port <= 65535:
+                continue
+            try:
+                parsed_ip = ipaddress.ip_address(host)
+                url_host = f"[{host}]" if parsed_ip.version == 6 else host
+            except ValueError:
+                url_host = host
+            key = (endpoint.ip.lower(), scheme, host.lower(), port)
+            if key in seen:
+                continue
+            seen.add(key)
+            target = f"{scheme}://{url_host}:{port}/"
+            out.append({
+                "target": target, "ip": endpoint.ip, "hostname": host,
+                "port": port, "scheme": scheme,
+            })
+            if len(out) > cap:
+                return out, True
+    return out, False
 
 
 class ScanEngine:
@@ -77,17 +114,28 @@ class ScanEngine:
         if request is None or cancel.is_set():
             return
 
+        if request.all_scanned_targets:
+            await self._run_rce_verify_batch(job, request, cancel)
+            return
+
+        if not request.target_url:
+            job.rce_verify_result = {
+                "ran": False, "verdict": "REJECTED", "summary": {},
+                "evidence_dir": None, "evidence_files": [],
+                "error": "target_url is required unless all_scanned_targets is enabled",
+            }
+            return
+
         parsed = urlsplit(request.target_url)
         host = (parsed.hostname or "").lower().rstrip(".")
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
         scanned = any(
-            host in {
-                device.ip.lower(),
-                (device.hostname or "").lower().rstrip("."),
-                (job.request.site_hosts.get(device.ip) or "").lower().rstrip("."),
-            }
-            and port in device.open_ports
+            endpoint.scheme.lower() == parsed.scheme.lower()
+            and endpoint.port == port
+            and host in {endpoint.ip.lower(), (endpoint.hostname or "").lower().rstrip(".")}
+            and endpoint.ip == device.ip
             for device in job.devices
+            for endpoint in device.web_endpoints
         )
         if not scanned:
             job.progress.phase = "rce_verify"
@@ -128,6 +176,153 @@ class ScanEngine:
                 result["error"] = "toolkit returned an invalid evidence path"
                 result["verdict"] = "ERROR"
         job.rce_verify_result = result
+
+    async def _run_rce_verify_batch(self, job: ScanJob, request, cancel: asyncio.Event) -> None:
+        """Verify every unique fast-scan HTTP endpoint in adaptive bounded waves."""
+        job.progress.phase = "rce_verify"
+        endpoint_limit = max(1, min(1000, int(self.settings.rce_verify_max_endpoints)))
+        endpoints, overflow = _rce_endpoint_inventory(job.devices, endpoint_limit)
+        if overflow:
+            job.rce_verify_result = {
+                "ran": False, "mode": "batch", "verdict": "REJECTED_LIMIT",
+                "summary": {"endpoint_limit": endpoint_limit}, "results": [],
+                "total_targets": endpoint_limit + 1, "completed_targets": 0,
+                "endpoint_limit": endpoint_limit, "evidence_dir": None,
+                "error": f"พบ endpoint อย่างน้อย {endpoint_limit + 1} รายการ; เกินเพดาน {endpoint_limit} รายการ จึงยังไม่ส่ง active request ไม่มีการตัดหรือสุ่มเป้าหมาย",
+            }
+            job.progress.rce_verify_total = endpoint_limit + 1
+            return
+        if not endpoints:
+            job.rce_verify_result = {
+                "ran": False, "mode": "batch", "verdict": "SKIPPED",
+                "summary": {}, "results": [], "total_targets": 0,
+                "completed_targets": 0, "evidence_dir": None,
+                "error": "fast scan ไม่พบ HTTP(S) endpoint ที่ยืนยันด้วย successful probe จึงไม่มี active request",
+            }
+            return
+
+        total = len(endpoints)
+        job.progress.rce_verify_total = total
+        job.progress.rce_verify_completed = 0
+        job.progress.rce_verify_active = 0
+        job.progress.rce_verify_batch_size = 0
+        rows: List[Optional[dict]] = [None] * total
+        configured_workers = max(1, min(MAX_RCE_WORKERS, int(self.settings.rce_verify_max_workers)))
+        reserve_mb = max(128, min(16384, int(self.settings.rce_verify_memory_reserve_mb)))
+        estimated_worker_mb = max(128, min(4096, int(self.settings.rce_verify_worker_memory_mb)))
+        batch_deadline = time.monotonic() + max(60, min(14400, int(self.settings.rce_verify_batch_timeout_s)))
+        next_index = 0
+        batch_count = 0
+        max_parallel_used = 0
+
+        def make_result() -> dict:
+            completed = sum(1 for row in rows if row is not None and row.get("verdict") not in {
+                "DEFERRED_RESOURCE_LIMIT", "DEFERRED_BATCH_TIMEOUT", "CANCELLED_NOT_STARTED"
+            })
+            has_deferred = any(row is not None and str(row.get("verdict", "")).startswith(("DEFERRED_", "CANCELLED_")) for row in rows)
+            confirmed = any(row is not None and row.get("verdict") in {"RCE_CONFIRMED", "CANARY_CONFIRMED"} for row in rows)
+            verdict = "RCE_CONFIRMED" if confirmed else ("PARTIAL" if has_deferred else "BATCH_COMPLETED")
+            return {
+                "ran": any(row is not None and row.get("ran") for row in rows),
+                "mode": "batch", "verdict": verdict, "summary": {},
+                "total_targets": total, "completed_targets": completed,
+                "batch_count": batch_count, "max_parallel": max_parallel_used,
+                "results": [row for row in rows if row is not None],
+                "endpoint_limit": endpoint_limit, "evidence_dir": None,
+            }
+
+        async def verify_one(index: int) -> tuple[int, dict]:
+            endpoint = endpoints[index]
+            evidence_dir = os.path.join(
+                self.settings.data_dir, "rce-verify", job.id, f"{index + 1:04d}"
+            )
+            try:
+                result = await chain_runner.run_rce_verify_target(
+                    endpoint["target"], self.settings, evidence_dir=evidence_dir,
+                    operator=request.operator, timeout=request.timeout,
+                    no_verify_ssl=request.no_verify_ssl, pinned_ip=endpoint["ip"],
+                    max_concurrency=configured_workers,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # a target failure must not abort the remaining inventory
+                result = {
+                    "ran": False, "verdict": "ERROR", "summary": {},
+                    "evidence_dir": None, "evidence_files": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            result["target"] = endpoint["target"]
+            result.update({k: endpoint[k] for k in ("ip", "hostname", "port", "scheme")})
+            returned_dir = result.get("evidence_dir")
+            if returned_dir:
+                try:
+                    data_root = Path(self.settings.data_dir).resolve()
+                    expected = Path(evidence_dir).resolve()
+                    evidence_path = Path(returned_dir).resolve()
+                    if evidence_path != expected or not evidence_path.is_relative_to(data_root):
+                        raise ValueError("toolkit returned an invalid evidence path")
+                    result["evidence_dir"] = os.path.relpath(evidence_path, data_root)
+                except (OSError, TypeError, ValueError):
+                    result["evidence_dir"] = None
+                    result["error"] = "toolkit returned an invalid evidence path"
+                    result["verdict"] = "ERROR"
+            return index, result
+
+        while next_index < total:
+            if cancel.is_set():
+                break
+            if time.monotonic() >= batch_deadline:
+                break
+            batch_size = choose_batch_size(
+                total - next_index,
+                available_bytes=available_memory_bytes(),
+                max_workers=configured_workers,
+                reserve_mb=reserve_mb,
+                worker_memory_mb=estimated_worker_mb,
+            )
+            if batch_size <= 0:
+                break
+            batch = list(range(next_index, min(total, next_index + batch_size)))
+            job.progress.rce_verify_active = len(batch)
+            job.progress.rce_verify_batch_size = len(batch)
+            max_parallel_used = max(max_parallel_used, len(batch))
+            batch_count += 1
+            completed_batch = await asyncio.gather(*(verify_one(i) for i in batch))
+            peak_rss = 0
+            for index, result in completed_batch:
+                rows[index] = result
+                peak_rss = max(peak_rss, int(result.get("peak_rss_bytes") or 0))
+            if peak_rss:
+                estimated_worker_mb = max(
+                    estimated_worker_mb,
+                    min(4096, int((peak_rss * 1.5) / (1024 * 1024)) + 1),
+                )
+            next_index += len(batch)
+            job.progress.rce_verify_completed = next_index
+            job.progress.rce_verify_active = 0
+            job.rce_verify_result = make_result()
+
+        if next_index < total:
+            if cancel.is_set():
+                reason = "CANCELLED_NOT_STARTED"
+                explanation = "งานถูกยกเลิกก่อนเริ่ม endpoint นี้"
+            elif time.monotonic() >= batch_deadline:
+                reason = "DEFERRED_BATCH_TIMEOUT"
+                explanation = "ถึงเพดานเวลารวมของ batch ก่อนเริ่ม endpoint นี้"
+            else:
+                reason = "DEFERRED_RESOURCE_LIMIT"
+                explanation = "หน่วยความจำที่ว่างไม่พอสำหรับเริ่ม batch ถัดไป; ไม่มี active request ถูกส่งไปยัง endpoint นี้"
+            for index in range(next_index, total):
+                endpoint = endpoints[index]
+                rows[index] = {
+                    "ran": False, "target": endpoint["target"],
+                    **{k: endpoint[k] for k in ("ip", "hostname", "port", "scheme")},
+                    "verdict": reason, "summary": {}, "evidence_dir": None,
+                    "evidence_files": [], "error": explanation,
+                }
+        job.progress.rce_verify_active = 0
+        job.progress.rce_verify_completed = next_index
+        job.rce_verify_result = make_result()
 
     @staticmethod
     def _label(req) -> str:
@@ -314,6 +509,7 @@ class ScanEngine:
                     findings: List[Finding] = list(chain_map.get(ip, []))
                     seen_rules: set[str] = {f.rule_id for f in findings}
                     web_open: List[int] = []
+                    web_endpoints: List[WebEndpoint] = []
                     tmeta = chain_runner.get_target_meta(ip) if hasattr(chain_runner, "get_target_meta") else {}
                     php_version = tmeta.get("php_version")
                     server = tmeta.get("server")
@@ -331,6 +527,11 @@ class ScanEngine:
                         if port in canary_fp and wr.fingerprint == canary_fp[port]:
                             continue
                         web_open.append(port)
+                        web_endpoints.append(WebEndpoint(
+                            ip=ip, hostname=wr.hostname or site_host or ip,
+                            port=wr.probe_port or port,
+                            scheme=wr.probe_scheme or wr.scheme,
+                        ))
                         php_version = php_version or wr.php_version
                         runtime = runtime or wr.runtime
                         server = server or wr.server
@@ -389,7 +590,8 @@ class ScanEngine:
                     mac=arp.get(ip) or tmeta.get("mac"),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
                     service=service, php_version=php_version, server=server, cms=cms, runtime=runtime,
-                    open_ports=sorted(web_open), services=services, latency_ms=latency,
+                    open_ports=sorted(web_open), web_endpoints=web_endpoints,
+                    services=services, latency_ms=latency,
                     severity=severity,
                     assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
                     findings=findings, headers=merged_headers,

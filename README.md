@@ -76,26 +76,28 @@ Chain ใช้กติกา scope เดียวกับระบบหล�
 
 ### RCE Verify API (active)
 
-การตรวจนี้เรียก `run_rce_verify` ของ Security Audit Toolkit โดยตรง และรองรับ URL เต็ม, LFI URL ที่มี `FUZZ`,
-session endpoint, timeout ต่อ request, การปิดตรวจ certificate สำหรับกรณีจำเป็น และ operator metadata
-ถ้าไม่ส่ง LFI/session endpoint toolkit จะ autodetect ตามพฤติกรรมต้นทาง ผลหลักฐานถูกแยกตาม run
+การตรวจนี้เรียก `run_rce_verify` ของ Security Audit Toolkit ใน subprocess และเก็บหลักฐานแยกตาม endpoint
+โหมด standalone ยังคงรับ URL เต็ม, LFI URL ที่มี `FUZZ`, session endpoint, timeout, ตัวเลือก TLS และ operator
+ส่วน one-click batch จะให้ toolkit autodetect LFI/session เอง เพื่อไม่เปิดช่องให้ URL เสริมข้ามขอบเขต
 
 เปิด API โดยตั้ง `THSCAN_RCE_VERIFY_ENABLED=1` และ `THSCAN_RCE_VERIFY_TOKEN` เป็น random secret
 อย่างน้อย 32 ตัวอักษร (ส่งด้วย `Authorization: Bearer …`; ห้ามฝัง token ใน frontend หรือ commit ลง Git)
-ทุกคำขอต้องส่ง `confirm: true` และ `target_url` เป็น HTTP(S) URL การเรียกเป็น standalone ไม่ต้องผูกกับ
-scan job และรับ public target ได้ โดย API ส่ง ownership override ของ toolkit หลังผ่าน Bearer authentication
-และการยืนยันของ operator เนื่องจาก API ไม่สามารถพิสูจน์กรรมสิทธิ์ทางเทคนิคได้ จึงควรจำกัด token/route
-ไว้กับผู้ใช้ที่ได้รับอนุญาต; เชื่อมกับระบบ login ของหน่วยงานเมื่อพร้อมใช้งาน
+ทุกคำขอต้องส่ง `confirm: true` การเรียก standalone ต้องส่ง `target_url` แบบ HTTP(S); one-click scan ส่ง
+`all_scanned_targets: true` แทน URL เดี่ยว การเรียก standalone ไม่ผูกกับ scan job และรับ public target ได้
+โดย API ส่ง ownership override ของ toolkit หลังผ่าน Bearer authentication และการยืนยันของ operator
+เนื่องจาก API ไม่สามารถพิสูจน์กรรมสิทธิ์ทางเทคนิคได้ จึงควรจำกัด token/route ไว้กับผู้ได้รับอนุญาต
 
-ในหน้าเว็บ ให้เปิดแผง **ขั้นสูง → โหมดรวดเร็ว** แล้วเลือก **ยืนยันใช้ RCE Verify แบบ active หลัง fast scan**; การเลือกนี้เป็นการยืนยันสำหรับงานนั้นและเปิด popup ตั้งค่าทันที โดยไม่ต้องติ๊กยืนยันซ้ำใน popup กรอก URL/ตัวเลือกและ Bearer token แล้วกดเริ่มจากฟอร์มเพื่อสร้าง scan job เดียว: ทำ fast scan หนึ่งรอบก่อน แล้วเรียก RCE Verify ต่ออัตโนมัติ หาก URL/พอร์ตที่เลือกไม่พบในผลสแกน จะข้าม active request และแสดงเหตุผลในผลลัพธ์ การปิด popup จะยกเลิกการเลือก RCE และไม่มีปุ่มปลดล็อกหรือแบบฟอร์มยืนยันซ้ำในหน้าผลการสแกน
+ในหน้าเว็บ ให้เปิด **ขั้นสูง → โหมดรวดเร็ว** แล้วเลือก **ยืนยันใช้ RCE Verify แบบ active หลัง fast scan**; popup เป็นจุดยืนยันและกรอก Bearer token เพียงครั้งเดียว ก่อนเริ่ม scan job เดียว ระบบจะทำ fast scan หนึ่งรอบ แล้วนำ endpoint HTTP(S) ทุกตัวที่ตอบ probe สำเร็จเข้าสู่ RCE Verify โดยไม่สุ่มเลือก ทั้ง scheme, hostname, IP และ port ถูกเก็บจาก probe จริงและใช้สร้างรายการเป้าหมาย
 
-ตัวอย่าง body สำหรับตรวจ URL:
+batch ปรับจำนวน worker ก่อนเริ่มแต่ละ wave จากหน่วยความจำที่ว่าง (รวม cgroup limit เมื่อมี), ใช้ค่า RSS สูงสุดที่วัดได้จาก worker เพื่อเพิ่มประมาณการหน่วยความจำของ wave ถัดไป และมีเพดาน concurrency รวมต่อ process สูงสุด 8 (ค่าเริ่มต้น 2) หากไม่มี memory telemetry จะทำงานทีละ endpoint; หากหน่วยความจำเหลือน้อยเกิน reserve จะไม่เริ่ม wave ถัดไป แต่แสดง endpoint ที่ยังไม่เริ่มอย่างชัดเจน ไม่มีการตัดหรือสุ่มรายการโดยเงียบ ๆ ค่าเริ่มต้นยอมรับไม่เกิน 50 endpoint ต่อ job; ถ้าเกินเพดาน จะปฏิเสธ batch ก่อนส่ง active request ใด ๆ ให้ลดขอบเขต fast scan หรือปรับเพดานโดยผู้ดูแล
+
+เพื่อคง scope ตามผล fast scan batch จะ pin DNS ของ hostname ไปยัง IP ที่ probe ยืนยัน, ยอมให้ request/redirect อยู่ใน origin เดิม (scheme + host + port) เท่านั้น และไม่รับ custom LFI/session URL ในโหมด batch หากมี HTTP→HTTPS หรือเปลี่ยน port ระบบจะไม่ตาม redirect ข้าม origin; endpoint HTTPS/port นั้นจะถูกตรวจแยกเมื่อ fast scan ยืนยันว่ามีอยู่ การปิด popup จะยกเลิกการเลือก RCE และไม่มีปุ่มปลดล็อกหรือแบบฟอร์มยืนยันซ้ำในหน้าผลการสแกน
+
+ตัวอย่าง body สำหรับตรวจ endpoint ทั้งหมดใน one-click fast scan (ส่ง Bearer token ใน `Authorization` header):
 
 ```json
 {
-  "target_url": "https://agency.example.gov/portal",
-  "lfi_url": "https://agency.example.gov/index.php?page=FUZZ",
-  "session_endpoint": "https://agency.example.gov/upload.php",
+  "all_scanned_targets": true,
   "timeout": 10,
   "no_verify_ssl": false,
   "operator": "agency-cert",
@@ -103,12 +105,9 @@ scan job และรับ public target ได้ โดย API ส่ง owne
 }
 ```
 
-ถ้าจะ autodetect ให้ละ `lfi_url` และ `session_endpoint` ออก หาก certificate เป็น self-signed ให้ตั้ง
-`no_verify_ssl: true` อย่างมีเหตุผล LFI/session endpoints อาจระบุแยกได้เหมือน toolkit ต้นทาง และ redirect
-ใช้พฤติกรรมปกติของ HTTP session ใน toolkit โดยไม่มี scan-job host/port allowlist เพิ่มเติม
-แอปยังบังคับ wall-clock deadline (`THSCAN_RCE_VERIFY_TOTAL_TIMEOUT`) และจำกัด active verify ที่กำลัง
-ทำงานพร้อมกันไว้หนึ่งงาน โหมดนี้เป็น active check: proof payload คงที่ของ toolkit อาจเรียก `id` บน
-เป้าหมาย และไม่รับคำสั่ง shell จากผู้เรียก API
+สำหรับ standalone endpoint ให้ใช้ `target_url` และอาจระบุ `lfi_url`/`session_endpoint` ได้ หาก certificate
+เป็น self-signed ให้ตั้ง `no_verify_ssl: true` อย่างมีเหตุผล โหมด active ใช้ proof payload ของ toolkit
+ซึ่งอาจเรียก `id` บนเป้าหมาย และไม่รับคำสั่ง shell จากผู้เรียก API
 
 ### ตรวจพอร์ต
 
@@ -188,6 +187,11 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 | `THSCAN_RCE_VERIFY_ENABLED` | `0` | เปิด API สำหรับ active RCE Verify โดยชัดแจ้ง |
 | `THSCAN_RCE_VERIFY_TOKEN` | *(ไม่มี)* | Bearer secret แบบ random อย่างน้อย 32 ตัวอักษร |
 | `THSCAN_RCE_VERIFY_TOTAL_TIMEOUT` | `180` | wall-clock deadline ของ RCE Verify subprocess (วินาที) |
+| `THSCAN_RCE_VERIFY_MAX_ENDPOINTS` | `50` | เพดาน endpoint ต่อ batch job; เกินแล้วปฏิเสธก่อนเริ่ม active request (1–1000) |
+| `THSCAN_RCE_VERIFY_MAX_WORKERS` | `2` | concurrency ceiling; ปรับ batch size ตาม memory อัตโนมัติ (1–8) |
+| `THSCAN_RCE_VERIFY_MEMORY_RESERVE_MB` | `1024` | RAM ที่สงวนไว้ไม่ให้ RCE worker ใช้ |
+| `THSCAN_RCE_VERIFY_WORKER_MEMORY_MB` | `512` | ประมาณการ RAM ต่อ worker เริ่มต้น; ปรับขึ้นตาม RSS สูงสุดที่วัดได้ |
+| `THSCAN_RCE_VERIFY_BATCH_TIMEOUT` | `7200` | เวลารวมสูงสุดของ batch (วินาที) |
 | `THSCAN_MAX_PORT_PROBES` | `2000000` | ขีดจำกัด (ที่อยู่ × พอร์ต) ต่อการสแกน |
 | `THSCAN_MAX_SOCKETS` | *(คำนวณอัตโนมัติ)* | การเชื่อมต่อพร้อมกันทั้งโปรแกรม |
 | `THSCAN_GOV_SUFFIXES` | `go.th,or.th,mi.th,ac.th,in.th` | โดเมนที่ถือว่าเป็นของหน่วยงาน (ใช้กับโหมดลิงก์) |
@@ -202,7 +206,7 @@ thscan จึงทดสอบกับที่อยู่ที่ไม่�
 |---|---|---|
 | `GET` | `/api/config` | ขอบเขต ลิมิต พอร์ต timezone รายการตัวอย่าง |
 | `GET` | `/api/autodetect` | วงเครือข่ายของเครื่องนี้ |
-| `POST` | `/api/scans` | สร้าง scan job เช่น `{"targets": ["10.0.0.0/24"]}` หรือ `{"sites": ["https://www.agency.go.th"]}`; one-click fast + RCE เพิ่ม `rce_verify` object พร้อม `target_url`/options และ `confirm: true` พร้อมส่ง Bearer token ใน `Authorization` header (ใช้ได้เฉพาะ fast mode; token ไม่ถูกเก็บใน job) |
+| `POST` | `/api/scans` | สร้าง scan job เช่น `{"targets": ["10.0.0.0/24"]}` หรือ `{"sites": ["https://www.agency.go.th"]}`; one-click fast + RCE เพิ่ม `rce_verify: {"all_scanned_targets": true, "confirm": true, ...}` และ Bearer token ใน `Authorization` header (เฉพาะ fast mode; token ไม่ถูกเก็บใน job) |
 | `GET` | `/api/resolve?q=` | ตรวจลิงก์ล่วงหน้า: IP, โดเมนหน่วยงาน, อยู่ในขอบเขตไหม |
 | `GET` / `DELETE` | `/api/scans` | รายการประวัติ / ล้างประวัติ |
 | `GET` | `/api/scans/{id}` · `/summary` | ผลเต็ม / สรุปสำหรับ poll |

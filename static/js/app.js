@@ -608,7 +608,7 @@ async function viewScan(_, alive) {
     S.rceVerify = true;
     updateScan();
     const body = { ...plan.body, port_profile: S.profile, custom_ports: S.profile === "custom" ? S.custom : "", concurrency: S.speed, polite_delay_ms: S.delay, scan_mode: S.mode2 };
-    openRceVerifyForm(rceTargetPrefillForScan(body), body);
+    openRceVerifyForm(body);
   });
   $("#p-adv").addEventListener("click", (e) => {
     const b = e.target.closest("[data-mode2]");
@@ -713,7 +713,7 @@ function renderAdvPanel() {
       <button type="button" class="opt" data-mode2="deep" aria-pressed="${S.mode2 === "deep"}" ${deepOff ? "disabled" : ""}><span style="min-width:0"><span class="ot">โหมดเชิงลึก</span><span class="od">${deepOff ? "ยังไม่พร้อมใช้งาน" : "ตรวจเวอร์ชันบริการและเส้นทางเครือข่าย"}</span></span></button>
     </div>
     ${S.mode2 === "fast" ? `<div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:14px;background:${cfg.rce_verify_enabled ? "var(--soft)" : "#F7F7FA"}">
-      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ยืนยันใช้ RCE Verify แบบ active หลัง fast scan <span style="font-weight:400;color:var(--muted)">— เลือกเฉพาะเป้าหมายที่ได้รับอนุญาต; การเลือกนี้เป็นการยืนยันสำหรับงานนี้</span></span></label>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:600"><input id="rce-after" type="checkbox" ${S.rceVerify ? "checked" : ""} ${cfg.rce_verify_enabled ? "" : "disabled"} style="margin-top:5px"><span>ยืนยันใช้ RCE Verify แบบ active หลัง fast scan <span style="font-weight:400;color:var(--muted)">— ตรวจทุก HTTP(S) endpoint ที่ fast scan ยืนยัน ไม่สุ่มเลือก; เพดาน ${num(cfg.rce_verify_max_endpoints || 50)} endpoints</span></span></label>
       ${cfg.rce_verify_enabled ? "" : `<p class="od" style="margin-top:6px">ผู้ดูแลต้องเปิด <span class="mono">THSCAN_RCE_VERIFY_ENABLED=1</span> ฝั่งเซิร์ฟเวอร์ก่อน</p>`}
     </div>` : ""}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #EDF0F8"></div>
@@ -894,9 +894,10 @@ async function viewScanning([id], alive) {
     const rce = p.phase === "rce_verify";
     const inspect = ["inspect", "cybers_rmutl", "traceroute"].includes(p.phase);
     const frac1 = Math.min(1, (p.probed || 0) / total), frac2 = inspect ? (p.to_inspect ? (p.inspected || 0) / p.to_inspect : 1) : 0;
-    const pct = rce ? 98 : inspect ? 55 + Math.round(frac2 * 43) : Math.round(frac1 * 55);
+    const rceFrac = p.rce_verify_total ? Math.min(1, (p.rce_verify_completed || 0) / p.rce_verify_total) : 0;
+    const pct = rce ? 95 + Math.round(rceFrac * 5) : inspect ? 55 + Math.round(frac2 * 40) : Math.round(frac1 * 55);
     const stage = rce ? 3 : !p.phase ? 0 : inspect ? 2 : 1;
-    const fills = rce ? [1, 1, 1, 0.5] : [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
+    const fills = rce ? [1, 1, 1, Math.max(0.15, rceFrac)] : [p.phase ? 1 : 0.5, inspect ? 1 : frac1, frac2];
     $$("[id^=seg]").forEach((b, i) => b.style.setProperty("--f", `${Math.round((fills[i] || 0) * 100)}%`));
     const steps = STEPS.map(([t, h], i) => {
       const st = i < stage ? "done" : i === stage ? "on" : "wait";
@@ -918,7 +919,7 @@ async function viewScanning([id], alive) {
     ringEl.style.strokeDasharray = `${pct} 100`;
     pctEl.textContent = `${pct}%`;
     const stepLabel = (STEPS[stage] || STEPS[0])[0];
-    const phase = stopping ? "กำลังหยุด…" : `${rce ? `ขั้นที่ 4 จาก 4 · กำลังทำ RCE Verify (active)` : inspect ? `ขั้นที่ 3 จาก ${STEPS.length} · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก ${STEPS.length} · ${stepLabel}`} ${tip("ชี้ที่แถบความคืบหน้าเพื่อดูว่าแต่ละขั้นทำอะไร")}`;
+    const phase = stopping ? "กำลังหยุด…" : `${rce ? `ขั้นที่ 4 จาก 4 · RCE Verify ${num(p.rce_verify_completed)}/${num(p.rce_verify_total)} endpoints · batch ปัจจุบัน ${num(p.rce_verify_batch_size)} · active ${num(p.rce_verify_active)}` : inspect ? `ขั้นที่ 3 จาก ${STEPS.length} · ${STEPS[2][0]} (${num(p.inspected)}/${num(p.to_inspect)} เครื่อง)` : `ขั้นที่ ${stage + 1} จาก ${STEPS.length} · ${stepLabel}`} ${tip("batch size ปรับตามหน่วยความจำที่ว่าง; หากไม่พอ ระบบจะไม่เริ่ม batch ใหม่")}`;
     const phaseEl = $("#sc-phase");
     if (phase !== lastPhase && phaseEl) { phaseEl.innerHTML = phase; lastPhase = phase; }
     const cp = $("#c-probed"), ct = $("#c-total"), co = $("#c-online"), cr = $("#c-risks"), cn = $("#sc-note");
@@ -1112,6 +1113,21 @@ function cubeSvg(d) {
 function showRceVerifyResult(result) {
   const verdict = String(result.verdict || "UNKNOWN");
   const confirmed = ["RCE_CONFIRMED", "CANARY_CONFIRMED"].includes(verdict);
+  const batchResults = Array.isArray(result.results) ? result.results : null;
+  if (batchResults) {
+    const rows = batchResults.map((item) => {
+      const detail = JSON.stringify(item.summary || {}, null, 2);
+      const extra = [item.error, item.evidence_dir ? `หลักฐาน: ${item.evidence_dir}` : ""].filter(Boolean).join(" · ");
+      return `<tr><td class="mono">${esc(item.target || "")}</td><td>${esc(item.ip || "")}</td><td>${esc(item.verdict || "UNKNOWN")}${extra ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(extra)}</div>` : ""}${detail !== "{}" ? `<details style="margin-top:6px"><summary>รายละเอียด</summary><pre class="evidence" style="max-height:24vh;overflow:auto;white-space:pre-wrap">${esc(detail)}</pre></details>` : ""}</td></tr>`;
+    }).join("");
+    openModal(`<h2>ผล RCE Verify · batch</h2>
+      <p class="notice ${confirmed ? "b-bad" : "b-blue"}" style="margin-top:12px">${ic(confirmed ? "alert" : "shield", 20)}<span><b>${esc(verdict)}</b> · ตรวจเสร็จ ${num(result.completed_targets || 0)}/${num(result.total_targets || 0)} endpoints · ${num(result.batch_count || 0)} batches · พร้อมกันสูงสุด ${num(result.max_parallel || 0)}</span></p>
+      <p class="lead" style="margin-top:10px">ผลที่ไม่ยืนยันช่องโหว่ไม่ได้รับรองว่าเป้าหมายปลอดภัยทั้งหมด ระบบใช้เฉพาะ endpoint ที่ fast scan ยืนยันและยึด DNS/redirect ไว้ใน origin เดิม</p>
+      ${result.error ? `<p class="notice b-warn" style="margin-top:10px">${ic("warn", 18)}<span>${esc(result.error)}</span></p>` : ""}
+      <div style="max-height:55vh;overflow:auto;margin-top:12px"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Endpoint</th><th style="text-align:left">IP ที่ยืนยัน</th><th style="text-align:left">ผล</th></tr></thead><tbody>${rows || `<tr><td colspan="3">ไม่มี endpoint ที่เริ่มตรวจ</td></tr>`}</tbody></table></div>
+      <div class="modal-foot"><button type="button" class="btn btn-g" data-close>ปิด</button></div>`, "ผล RCE Verify");
+    return;
+  }
   const summary = JSON.stringify(result.summary || {}, null, 2);
   const files = Array.isArray(result.evidence_files) ? result.evidence_files : [];
   openModal(`<h2>ผล RCE Verify</h2>
@@ -1122,34 +1138,14 @@ function showRceVerifyResult(result) {
     ${result.evidence_dir ? `<p class="muted" style="margin-top:8px;font-size:13px">หลักฐาน: <span class="mono">${esc(result.evidence_dir)}</span>${files.length ? ` · ${esc(files.join(", "))}` : ""}</p>` : ""}
     <div class="modal-foot"><button type="button" class="btn btn-g" data-close>ปิด</button></div>`, "ผล RCE Verify");
 }
-function rceTargetPrefillForScan(scanBody) {
-  const sites = Array.isArray(scanBody.sites) ? scanBody.sites : [];
-  if (sites.length) {
-    const raw = String(sites[0]).trim();
-    try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).href; } catch { /* ask operator to enter a valid URL */ }
-  }
-  const targets = Array.isArray(scanBody.targets) ? scanBody.targets : [];
-  if (targets.length === 1) {
-    const raw = String(targets[0]).trim();
-    const parsed = parseIpTarget(raw);
-    if (parsed) {
-      const secure = [443, 8443, 9443, 10443].includes(parsed.port);
-      return `${secure ? "https" : "http"}://${parsed.ip}${parsed.port ? `:${parsed.port}` : ""}/`;
-    }
-    if (/^https?:\/\//i.test(raw)) return raw;
-  }
-  return "";
-}
-function openRceVerifyForm(target, scanBody) {
+function openRceVerifyForm(scanBody) {
   const submitLabel = "เริ่ม fast scan และต่อ RCE Verify";
   let launched = false;
   const m = openModal(`<h2>ตั้งค่า fast scan + RCE Verify</h2>
-    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>การเลือก RCE Verify บนหน้า scan เป็นการยืนยัน active test สำหรับงานนี้ หลังส่งแบบฟอร์ม ระบบจะทำ fast scan หนึ่งรอบแล้วเรียก RCE Verify ต่อกับ URL นี้อัตโนมัติ การตรวจอาจส่ง proof payload ไปยังเป้าหมาย ใช้เฉพาะเป้าหมายที่ได้รับอนุญาต</span></p>
+    <p class="notice b-bad" style="margin-top:12px">${ic("alert", 20)}<span>การเลือกนี้เป็นการยืนยัน active test หนึ่งครั้งสำหรับงานนี้ หลัง fast scan เสร็จ ระบบจะตรวจทุก HTTP(S) endpoint ที่ตอบ probe สำเร็จ โดยไม่สุ่มและไม่ตัดรายการเงียบ ๆ ปลายทางจะถูก pin กับ IP/origin ที่ยืนยันจาก fast scan; ใช้เฉพาะระบบที่หน่วยงานได้รับอนุญาต</span></p>
+    <p class="notice b-blue" style="margin-top:10px">${ic("shield", 18)}<span>เพดาน ${num(cfg.rce_verify_max_endpoints || 50)} endpoints ต่อ job · ทำงานเป็น batch โดยปรับ concurrency ตามหน่วยความจำ · ถ้าเกินเพดานจะไม่เริ่ม active request ใด ๆ</span></p>
     <p class="lead">Bearer token ใช้ยืนยันคำขอครั้งนี้เท่านั้นและไม่ถูกบันทึกใน browser หรือ scan job</p>
     <form id="rce-form" style="display:grid;gap:10px;margin-top:14px">
-      <label><span class="lbl">Target URL</span><input class="inp" id="rce-target" type="url" required maxlength="2048" autocomplete="url" value="${esc(target)}"></label>
-      <label><span class="lbl">LFI URL (เว้นว่างเพื่อ autodetect; ถ้าระบุให้มี FUZZ)</span><input class="inp" id="rce-lfi" type="url" maxlength="4096" autocomplete="off" placeholder="https://host/index.php?page=FUZZ"></label>
-      <label><span class="lbl">Session endpoint (ไม่บังคับ)</span><input class="inp" id="rce-session" type="url" maxlength="2048" autocomplete="off" placeholder="https://host/upload.php"></label>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
         <label><span class="lbl">Timeout ต่อ request (วินาที)</span><input class="inp" id="rce-timeout" type="number" min="1" max="60" step="1" value="10" required></label>
         <label><span class="lbl">Operator</span><input class="inp" id="rce-operator" maxlength="120" value="thscan-operator" required></label>
@@ -1163,7 +1159,7 @@ function openRceVerifyForm(target, scanBody) {
       renderAdvPanel(); updateScan();
       const checkbox = $("#rce-after"); checkbox && checkbox.focus();
   });
-  $("#rce-target", m.el).focus();
+  $("#rce-timeout", m.el).focus();
   const form = $("#rce-form", m.el), token = $("#rce-token", m.el), run = $("#rce-run", m.el);
   const validate = () => { run.disabled = !token.value.trim(); };
   token.addEventListener("input", validate);
@@ -1173,9 +1169,7 @@ function openRceVerifyForm(target, scanBody) {
     const secret = token.value.trim(), btn = run;
     btn.disabled = true; btn.textContent = "กำลังเริ่ม fast scan…";
     const body = {
-      target_url: $("#rce-target", m.el).value.trim(),
-      lfi_url: $("#rce-lfi", m.el).value.trim() || null,
-      session_endpoint: $("#rce-session", m.el).value.trim() || null,
+      all_scanned_targets: true,
       timeout: Number($("#rce-timeout", m.el).value),
       no_verify_ssl: $("#rce-no-ssl", m.el).checked,
       operator: $("#rce-operator", m.el).value.trim(),

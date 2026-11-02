@@ -284,6 +284,9 @@ EXPOSURE_PROBES: List[Tuple[str, str, str, Severity, str, str, List[str], float]
 class WebResult:
     port: int
     scheme: str
+    hostname: Optional[str] = None
+    probe_port: Optional[int] = None
+    probe_scheme: Optional[str] = None
     status_code: Optional[int] = None
     server: Optional[str] = None
     powered_by: Optional[str] = None
@@ -475,6 +478,7 @@ async def _try(
 ) -> Optional[WebResult]:
     """GET the page, following redirects only while they stay on the same host."""
     name = host or ip
+    probe_scheme, probe_port = scheme, port
     path = "/"
     hop_headers: Dict[str, str] = {}
     for _ in range(_MAX_HOPS + 1):
@@ -514,6 +518,9 @@ async def _try(
     return WebResult(
         port=port,
         scheme=scheme,
+        hostname=name,
+        probe_port=probe_port,
+        probe_scheme=probe_scheme,
         status_code=resp.status_code,
         server=server,
         powered_by=merged.get("x-powered-by"),

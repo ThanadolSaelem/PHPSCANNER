@@ -54,6 +54,8 @@ def test_adapter_forwards_upstream_options_and_public_override(monkeypatch, tmp_
         total_timeout=25,
         no_verify_ssl=True,
         operator="authorized tester",
+        pinned_ip="203.0.113.9",
+        max_concurrency=2,
     ))
 
     assert result["ran"] is True
@@ -64,7 +66,10 @@ def test_adapter_forwards_upstream_options_and_public_override(monkeypatch, tmp_
     assert calls["payload"]["session_endpoint"].endswith("upload.php")
     assert calls["payload"]["timeout"] == 12
     assert calls["payload"]["no_verify_ssl"] is True
+    assert calls["payload"]["pinned_ip"] == "203.0.113.9"
     assert "i_own_this_target=True" in rce_verify._CHILD_RUNNER
+    assert "out-of-scan HTTP origin blocked" in rce_verify._CHILD_RUNNER
+    assert "out-of-scan DNS lookup blocked" in rce_verify._CHILD_RUNNER
 
 
 def _configure_api(monkeypatch, tmp_path):
@@ -167,7 +172,7 @@ def test_combined_scan_api_requires_authorization_and_queues_rce_options(monkeyp
         "port_profile": "web",
         "scan_mode": "fast",
         "rce_verify": {
-            "target_url": "http://192.0.2.10/",
+            "all_scanned_targets": True,
             "timeout": 8,
             "operator": "unit-test",
             "confirm": True,
@@ -182,28 +187,39 @@ def test_combined_scan_api_requires_authorization_and_queues_rce_options(monkeyp
             json={**body, "rce_verify": {**body["rce_verify"], "confirm": False}},
             headers=headers,
         )
+        out_of_scope_aux = client.post(
+            "/api/scans",
+            json={**body, "rce_verify": {**body["rce_verify"],
+                                          "lfi_url": "https://other.example/page?x=FUZZ"}},
+            headers=headers,
+        )
         accepted = client.post("/api/scans", json=body, headers=headers)
 
     assert unauthenticated.status_code == 401
     assert no_consent.status_code == 400
+    assert out_of_scope_aux.status_code == 400
     assert accepted.status_code == 200
-    assert calls["request"].rce_verify.target_url == "http://192.0.2.10/"
+    assert calls["request"].rce_verify.all_scanned_targets is True
+    assert calls["request"].rce_verify.target_url is None
     assert calls["request"].rce_verify.confirm is True
     assert "authorization" not in calls["request"].dump_json_dict()
 
 
-def test_engine_chains_rce_after_fast_scan_and_skips_unscanned_url(monkeypatch, tmp_path):
+def test_engine_chains_batch_after_fast_scan_and_skips_when_no_web_endpoint(monkeypatch, tmp_path):
     import asyncio
     from datetime import datetime, timezone
 
     from app.config import Settings
-    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest
+    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
     from app.scanner import engine as eng
 
     calls = {}
 
     async def fake_scan(_engine, job, cancel):
-        job.devices = [Device(ip="192.0.2.10", open_ports=[80])]
+        job.devices = [Device(
+            ip="192.0.2.10", open_ports=[80],
+            web_endpoints=[WebEndpoint(ip="192.0.2.10", hostname="192.0.2.10", port=80, scheme="http")],
+        )]
         job.progress.total_ips = 1
         job.progress.probed = 1
         job.progress.to_inspect = 1
@@ -219,7 +235,7 @@ def test_engine_chains_rce_after_fast_scan_and_skips_unscanned_url(monkeypatch, 
     request = ScanRequest(
         targets=["192.0.2.10"],
         scan_mode="fast",
-        rce_verify=RceVerifyRequest(target_url="http://192.0.2.10/", confirm=True),
+        rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True),
     )
     job = ScanJob(id="rce-job", created_at=datetime.now(timezone.utc), request=request)
     monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
@@ -229,21 +245,186 @@ def test_engine_chains_rce_after_fast_scan_and_skips_unscanned_url(monkeypatch, 
 
     assert job.state.value == "completed", job.error
     assert calls["phase"] == "rce_verify"
-    assert calls["target"] == "http://192.0.2.10/"
-    assert job.rce_verify_result["verdict"] == "NOT_CONFIRMED"
-    assert job.rce_verify_result["evidence_dir"] == "rce-verify/rce-job"
+    assert calls["target"] == "http://192.0.2.10:80/"
+    assert calls["pinned_ip"] == "192.0.2.10"
+    assert job.rce_verify_result["verdict"] == "BATCH_COMPLETED"
+    assert job.rce_verify_result["results"][0]["evidence_dir"] == "rce-verify/rce-job/0001"
 
     calls.clear()
     request = ScanRequest(
         targets=["192.0.2.10"],
         scan_mode="fast",
-        rce_verify=RceVerifyRequest(target_url="http://192.0.2.11/", confirm=True),
+        rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True),
     )
     job = ScanJob(id="skip-job", created_at=datetime.now(timezone.utc), request=request)
+    async def fake_scan_without_web(_engine, scan_job, cancel):
+        scan_job.devices = [Device(ip="192.0.2.11", open_ports=[80])]
+    monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan_without_web)
     asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
     assert not calls
     assert job.rce_verify_result["verdict"] == "SKIPPED"
-    assert "ไม่มีการส่ง active request" in job.rce_verify_result["error"]
+    assert "ไม่มี active request" in job.rce_verify_result["error"]
+
+
+def test_batch_deduplicates_endpoints_and_adapts_concurrency(monkeypatch, tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.config import Settings
+    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
+    from app.scanner import engine as eng
+
+    async def fake_scan(_engine, scan_job, cancel):
+        return None
+    monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
+
+    settings = Settings()
+    settings.data_dir = str(tmp_path)
+    settings.rce_verify_max_endpoints = 10
+    settings.rce_verify_max_workers = 2
+    settings.rce_verify_memory_reserve_mb = 256
+    settings.rce_verify_worker_memory_mb = 128
+    request = ScanRequest(
+        targets=["192.0.2.20"], scan_mode="fast",
+        rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True),
+    )
+    job = ScanJob(id="batch-job", created_at=datetime.now(timezone.utc), request=request)
+    job.devices = [
+        Device(ip="192.0.2.20", open_ports=[80, 443], web_endpoints=[
+            WebEndpoint(ip="192.0.2.20", hostname="agency.example", port=80, scheme="http"),
+            WebEndpoint(ip="192.0.2.20", hostname="agency.example", port=80, scheme="http"),
+            WebEndpoint(ip="192.0.2.20", hostname="agency.example", port=443, scheme="https"),
+        ]),
+        Device(ip="192.0.2.21", open_ports=[8080], web_endpoints=[
+            WebEndpoint(ip="192.0.2.21", hostname="192.0.2.21", port=8080, scheme="http"),
+        ]),
+    ]
+    monkeypatch.setattr(eng, "available_memory_bytes", lambda: 2 * 1024**3)
+    active = 0
+    peak_active = 0
+    calls = []
+
+    async def fake_verify(target, _settings, **kwargs):
+        nonlocal active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        calls.append((target, kwargs["pinned_ip"]))
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {
+            "ran": True, "target": target, "verdict": "NOT_CONFIRMED",
+            "summary": {}, "evidence_dir": kwargs["evidence_dir"],
+            "evidence_files": [], "peak_rss_bytes": 96 * 1024**2,
+        }
+
+    monkeypatch.setattr(eng.chain_runner, "run_rce_verify_target", fake_verify)
+    asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
+
+    assert len(calls) == 3
+    assert peak_active == 2
+    assert job.rce_verify_result["total_targets"] == 3
+    assert job.rce_verify_result["completed_targets"] == 3
+    assert job.rce_verify_result["batch_count"] == 2
+    assert job.rce_verify_result["max_parallel"] == 2
+    assert {target for target, _ip in calls} == {
+        "http://agency.example:80/",
+        "https://agency.example:443/",
+        "http://192.0.2.21:8080/",
+    }
+
+
+def test_batch_endpoint_cap_rejects_before_any_active_request(monkeypatch, tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.config import Settings
+    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
+    from app.scanner import engine as eng
+
+    async def fake_scan(_engine, scan_job, cancel):
+        return None
+    monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
+
+    settings = Settings()
+    settings.data_dir = str(tmp_path)
+    settings.rce_verify_max_endpoints = 2
+    job = ScanJob(
+        id="too-many", created_at=datetime.now(timezone.utc),
+        request=ScanRequest(targets=["192.0.2.30"], scan_mode="fast",
+                            rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True)),
+    )
+    job.devices = [Device(ip="192.0.2.30", open_ports=[80, 81, 82], web_endpoints=[
+        WebEndpoint(ip="192.0.2.30", hostname="192.0.2.30", port=p, scheme="http")
+        for p in (80, 81, 82)
+    ])]
+    calls = []
+
+    async def fake_verify(*args, **kwargs):
+        calls.append(args)
+
+    monkeypatch.setattr(eng.chain_runner, "run_rce_verify_target", fake_verify)
+    asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
+
+    assert not calls
+    assert job.rce_verify_result["verdict"] == "REJECTED_LIMIT"
+    assert "ไม่มีการตัดหรือสุ่ม" in job.rce_verify_result["error"]
+
+
+def test_batch_stops_before_wave_when_memory_is_below_reserve(monkeypatch, tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.config import Settings
+    from app.models import Device, RceVerifyRequest, ScanJob, ScanRequest, WebEndpoint
+    from app.scanner import engine as eng
+
+    async def fake_scan(_engine, scan_job, cancel):
+        return None
+    monkeypatch.setattr(eng.ScanEngine, "_run", fake_scan)
+
+    settings = Settings()
+    settings.data_dir = str(tmp_path)
+    settings.rce_verify_max_endpoints = 10
+    settings.rce_verify_memory_reserve_mb = 1024
+    settings.rce_verify_worker_memory_mb = 512
+    job = ScanJob(
+        id="low-memory", created_at=datetime.now(timezone.utc),
+        request=ScanRequest(targets=["192.0.2.40"], scan_mode="fast",
+                            rce_verify=RceVerifyRequest(all_scanned_targets=True, confirm=True)),
+    )
+    job.devices = [Device(ip="192.0.2.40", open_ports=[80], web_endpoints=[
+        WebEndpoint(ip="192.0.2.40", hostname="192.0.2.40", port=80, scheme="http"),
+    ])]
+    monkeypatch.setattr(eng, "available_memory_bytes", lambda: 900 * 1024**2)
+    calls = []
+
+    async def fake_verify(*args, **kwargs):
+        calls.append(args)
+
+    monkeypatch.setattr(eng.chain_runner, "run_rce_verify_target", fake_verify)
+    asyncio.run(eng.ScanEngine(settings).run(job, asyncio.Event()))
+
+    assert not calls
+    assert job.rce_verify_result["verdict"] == "PARTIAL"
+    assert job.rce_verify_result["results"][0]["verdict"] == "DEFERRED_RESOURCE_LIMIT"
+
+
+def test_batch_size_planner_is_bounded_and_falls_back_to_one_worker():
+    from app.scanner.resource_budget import choose_batch_size
+
+    assert choose_batch_size(20, available_bytes=None, max_workers=8,
+                             reserve_mb=1024, worker_memory_mb=512) == 1
+    assert choose_batch_size(20, available_bytes=900 * 1024**2, max_workers=4,
+                             reserve_mb=1024, worker_memory_mb=512) == 0
+    assert choose_batch_size(20, available_bytes=3 * 1024**3, max_workers=8,
+                             reserve_mb=1024, worker_memory_mb=512) == 4
+
+
+def test_result_summary_is_bounded_before_job_persistence():
+    summary = {"output": "x" * 40000}
+    bounded = rce_verify._bounded_summary(summary, max_bytes=1024)
+    assert bounded["truncated"] is True
+    assert len(bounded["preview"]) <= 16000
 
 
 def test_toolkit_keeps_upstream_redirect_behavior():

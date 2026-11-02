@@ -67,6 +67,8 @@ async def get_config() -> dict:
         "nmap_available": nmap_scan.nmap_available(),
         "chain_available": chain_runner.available(),
         "rce_verify_enabled": settings.rce_verify_enabled,
+        "rce_verify_max_endpoints": max(1, min(1000, settings.rce_verify_max_endpoints)),
+        "rce_verify_max_workers": max(1, min(8, settings.rce_verify_max_workers)),
         "traceroute_available": nmap_scan.traceroute_available(),
         "timezone": getattr(local_tz(), "key", "Asia/Bangkok"),
         "max_port_probes": settings.max_port_probes,
@@ -250,6 +252,13 @@ def _require_rce_authorization(req: RceVerifyRequest, authorization: str | None)
 
 def _validate_rce_verify_request(req: RceVerifyRequest) -> None:
     """Validate RCE Verify inputs before any scan or active request begins."""
+    if req.all_scanned_targets:
+        if req.target_url:
+            raise HTTPException(400, "โหมดตรวจทุก endpoint ไม่รับ target_url แยกต่างหาก")
+        if req.lfi_url or req.session_endpoint:
+            raise HTTPException(400, "โหมด batch ใช้ autodetect ภายใน endpoint เท่านั้น; ห้ามกำหนด URL เสริมข้ามขอบเขต")
+    elif not req.target_url:
+        raise HTTPException(400, "ต้องระบุ target_url หรือเปิด all_scanned_targets")
     for value, label in ((req.target_url, "target_url"),
                          (req.lfi_url, "lfi_url"),
                          (req.session_endpoint, "session_endpoint")):
@@ -280,6 +289,8 @@ async def rce_verify(
 ) -> dict:
     """Run the upstream active RCE verifier for an operator-confirmed URL."""
     _require_rce_authorization(req, authorization)
+    if req.all_scanned_targets or not req.target_url:
+        raise HTTPException(400, "standalone RCE Verify ต้องระบุ target_url เดียว")
     _validate_rce_verify_request(req)
 
     run_id = uuid.uuid4().hex

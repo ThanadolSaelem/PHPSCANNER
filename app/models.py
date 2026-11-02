@@ -39,7 +39,8 @@ class JobState(str, Enum):
 
 
 class RceVerifyRequest(CompatBaseModel):
-    target_url: str = Field(min_length=8, max_length=2048)
+    target_url: Optional[str] = Field(default=None, min_length=8, max_length=2048)
+    all_scanned_targets: bool = False
     lfi_url: Optional[str] = Field(default=None, max_length=4096)
     session_endpoint: Optional[str] = Field(default=None, max_length=2048)
     timeout: float = Field(default=10.0, ge=1.0, le=60.0)
@@ -88,6 +89,14 @@ class RouteHop(CompatBaseModel):
     rtt_ms: Optional[float] = None
 
 
+class WebEndpoint(CompatBaseModel):
+    """HTTP(S) endpoint confirmed by a successful fast-scan probe."""
+    ip: str
+    hostname: Optional[str] = None
+    port: int
+    scheme: str
+
+
 class ServicePort(CompatBaseModel):
     port: int
     name: str
@@ -110,6 +119,7 @@ class Device(CompatBaseModel):
     runtime: Optional[str] = None  # human label: "PHP 8.2.35", "Node.js · Express", …
     route: List["RouteHop"] = Field(default_factory=list)  # deep mode: traceroute path
     open_ports: List[int] = Field(default_factory=list)  # web ports that answered HTTP
+    web_endpoints: List[WebEndpoint] = Field(default_factory=list)
     services: List[ServicePort] = Field(default_factory=list)  # every open TCP port found
     latency_ms: Optional[int] = None
     severity: Severity = Severity.safe
@@ -129,6 +139,10 @@ class ScanProgress(CompatBaseModel):
     phase: str = ""        # liveness | inspect
     to_inspect: int = 0    # hosts that answered liveness
     inspected: int = 0
+    rce_verify_total: int = 0
+    rce_verify_completed: int = 0
+    rce_verify_active: int = 0
+    rce_verify_batch_size: int = 0
 
 
 class ScheduleCreate(CompatBaseModel):

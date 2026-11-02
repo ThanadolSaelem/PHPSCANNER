@@ -11,34 +11,99 @@ import importlib
 import json
 import os
 import sys
+import weakref
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 _RESULT_MARKER = "__THSCAN_RCE_VERIFY_RESULT__"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_RUN_SEMAPHORE = asyncio.Semaphore(1)
+_RUN_SEMAPHORES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _run_gate(max_concurrency: Optional[int]) -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    gate = _RUN_SEMAPHORES.get(loop)
+    if gate is None:
+        limit = max(1, min(8, int(max_concurrency or 2)))
+        gate = asyncio.Semaphore(limit)
+        _RUN_SEMAPHORES[loop] = gate
+    return gate
+
+
+async def _sample_child_rss(pid: Optional[int], peak: List[int]) -> None:
+    if not pid:
+        return
+    try:
+        import psutil
+        process = psutil.Process(pid)
+    except (ImportError, OSError, ValueError):
+        return
+    while True:
+        try:
+            peak[0] = max(peak[0], int(process.memory_info().rss))
+            if not process.is_running():
+                return
+        except (psutil.Error, OSError, ValueError):
+            return
+        await asyncio.sleep(0.2)
 
 _CHILD_RUNNER = r'''
-import json, sys
+import contextlib, json, os, socket, sys, ipaddress
+from urllib.parse import urlsplit
+import requests
 import security_audit_toolkit as toolkit
 payload = json.load(sys.stdin)
+
+def _origin(value):
+    parsed = urlsplit(value)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return (scheme, host, port)
+
+def _install_scan_scope():
+    pinned_ip = payload.get("pinned_ip")
+    if not pinned_ip:
+        return
+    ipaddress.ip_address(pinned_ip)
+    allowed_origin = _origin(payload["target"])
+    target_host = allowed_origin[1]
+    original_send = requests.Session.send
+    def scoped_send(self, request, **kwargs):
+        if _origin(request.url) != allowed_origin:
+            raise requests.exceptions.InvalidURL("out-of-scan HTTP origin blocked")
+        return original_send(self, request, **kwargs)
+    requests.Session.send = scoped_send
+    original_getaddrinfo = socket.getaddrinfo
+    def pinned_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        value = host.decode() if isinstance(host, bytes) else str(host)
+        if value.lower().rstrip(".") == target_host:
+            return original_getaddrinfo(pinned_ip, port, family, type, proto, flags)
+        raise socket.gaierror("out-of-scan DNS lookup blocked")
+    socket.getaddrinfo = pinned_getaddrinfo
+
 try:
-    verdict, summary, evidence_dir = toolkit.run_rce_verify(
-        payload["target"],
-        lfi_url=payload.get("lfi_url"),
-        session_endpoint=payload.get("session_endpoint"),
-        evidence_dir=payload.get("evidence_dir"),
-        timeout=payload["timeout"],
-        no_verify_ssl=payload["no_verify_ssl"],
-        operator=payload.get("operator"),
-        confirm=False,
-        i_own_this_target=True,
-    )
+    _install_scan_scope()
+    with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        verdict, summary, evidence_dir = toolkit.run_rce_verify(
+            payload["target"],
+            lfi_url=payload.get("lfi_url"),
+            session_endpoint=payload.get("session_endpoint"),
+            evidence_dir=payload.get("evidence_dir"),
+            timeout=payload["timeout"],
+            no_verify_ssl=payload["no_verify_ssl"],
+            operator=payload.get("operator"),
+            confirm=False,
+            i_own_this_target=True,
+        )
+    encoded_summary = json.dumps(summary, ensure_ascii=False, default=str)
+    if len(encoded_summary.encode("utf-8", errors="replace")) > 32768:
+        summary = {"truncated": True, "preview": encoded_summary[:16000]}
     data = {"verdict": verdict, "summary": summary, "evidence_dir": evidence_dir}
 except BaseException as exc:
     data = {"verdict": "ERROR", "summary": {}, "evidence_dir": payload.get("evidence_dir"),
-            "error": type(exc).__name__ + ": " + str(exc)}
+            "error": (type(exc).__name__ + ": " + str(exc))[:1000]}
 print("__THSCAN_RCE_VERIFY_RESULT__" + json.dumps(data, ensure_ascii=False, default=str))
 '''
 
@@ -68,6 +133,16 @@ def _valid_http_url(value: Optional[str]) -> bool:
         return False
 
 
+def _bounded_summary(value: Any, max_bytes: int = 32768) -> Any:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        encoded = repr(value)
+    if len(encoded.encode("utf-8", errors="replace")) <= max_bytes:
+        return value
+    return {"truncated": True, "preview": encoded[:16000], "original_bytes_over": max_bytes}
+
+
 async def run(
     target: str,
     *,
@@ -78,6 +153,8 @@ async def run(
     total_timeout: float = 180.0,
     no_verify_ssl: bool = False,
     operator: Optional[str] = None,
+    pinned_ip: Optional[str] = None,
+    max_concurrency: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run the upstream verifier with its full target and discovery options.
 
@@ -127,19 +204,16 @@ async def run(
         "timeout": request_timeout,
         "no_verify_ssl": bool(no_verify_ssl),
         "operator": operator,
+        "pinned_ip": pinned_ip,
     }
 
-    try:
-        await asyncio.wait_for(_RUN_SEMAPHORE.acquire(), timeout=0.01)
-    except asyncio.TimeoutError:
-        return {
-            "ran": False, "target": target, "verdict": "BUSY", "summary": {},
-            "evidence_dir": None, "evidence_files": [],
-            "error": "another active RCE Verify is already running",
-        }
-
+    gate = _run_gate(max_concurrency)
+    await gate.acquire()
+    gate_acquired = True
     process = None
     result = None
+    peak_rss = [0]
+    monitor_task = None
     try:
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-c", _CHILD_RUNNER,
@@ -148,6 +222,7 @@ async def run(
             stderr=asyncio.subprocess.PIPE,
             cwd=str(_PROJECT_ROOT),
         )
+        monitor_task = asyncio.create_task(_sample_child_rss(getattr(process, "pid", None), peak_rss))
         communicate_task = asyncio.create_task(
             process.communicate(json.dumps(payload).encode("utf-8"))
         )
@@ -201,10 +276,17 @@ async def run(
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:
+        if monitor_task is not None:
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if process is not None and process.returncode is None:
             process.kill()
             await process.wait()
-        _RUN_SEMAPHORE.release()
+        if gate_acquired:
+            gate.release()
 
     if result is None:
         result = {
@@ -237,4 +319,6 @@ async def run(
         except OSError:
             pass
     result["evidence_files"] = evidence_files
+    result["summary"] = _bounded_summary(result.get("summary", {}))
+    result["peak_rss_bytes"] = peak_rss[0]
     return result

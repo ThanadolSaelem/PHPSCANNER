@@ -108,14 +108,23 @@ class JobStore:
                 job.duration_s = round((job.finished_at - job.started_at).total_seconds(), 2)
         if job.rce_verify_result and job.request.rce_verify:
             request = job.request.rce_verify
-            self.audit.record(
-                "rce_verify",
-                job_id=job.id,
-                target=request.target_url,
-                verdict=job.rce_verify_result.get("verdict"),
-                operator=request.operator,
-                ssl_verify=not request.no_verify_ssl,
-            )
+            rows = job.rce_verify_result.get("results")
+            if isinstance(rows, list) and rows:
+                for row in rows:
+                    self.audit.record(
+                        "rce_verify", job_id=job.id, target=row.get("target"),
+                        ip=row.get("ip"), port=row.get("port"),
+                        verdict=row.get("verdict"), operator=request.operator,
+                        ssl_verify=not request.no_verify_ssl,
+                    )
+            else:
+                self.audit.record(
+                    "rce_verify", job_id=job.id,
+                    target=request.target_url or "all_scanned_targets",
+                    verdict=job.rce_verify_result.get("verdict"),
+                    operator=request.operator,
+                    ssl_verify=not request.no_verify_ssl,
+                )
         summ = job.summary()
         self.audit.record(
             "scan_finished",
