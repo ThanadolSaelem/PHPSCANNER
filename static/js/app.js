@@ -846,12 +846,18 @@ async function viewScanning([id], alive) {
 
 /* ═══ view: results ════════════════════════════════════════════════════ */
 const R = { job: null, f: "all", q: "", sel: null, tab: "todo", swap: 0, tswap: 0 };
-const FILTERS = [["all", "ทุกเครื่อง", "#8A93C2"], ["urgent", "ต้องแก้ด่วน", "var(--crit-dot)"], ["fix", "ควรแก้ไข", "var(--warn-dot)"], ["ok", "ผ่าน", "var(--ok-dot)"], ["php", "เว็บ PHP", "#6D4AFF"], ["node", "เว็บ Node.js", "#0B7045"], ["caution", "มีพอร์ตที่ควรระวัง", "#F2C063"]];
+const FILTERS = [["all", "ทุกเครื่อง", "#8A93C2"],
+  ["affected", "ยืนยันได้รับผลกระทบ", "var(--crit-dot)"], ["unverified", "ยังยืนยันไม่ได้", "var(--warn-dot)"], ["fixedst", "มีหลักฐานว่าแก้แล้ว", "var(--ok-dot)"],
+  ["urgent", "ต้องแก้ด่วน", "var(--crit-dot)"], ["fix", "ควรแก้ไข", "var(--warn-dot)"], ["ok", "ผ่าน", "var(--ok-dot)"],
+  ["php", "เว็บ PHP", "#6D4AFF"], ["node", "เว็บ Node.js", "#0B7045"], ["caution", "มีพอร์ตที่ควรระวัง", "#F2C063"]];
 const services = (d) => (d.services && d.services.length ? d.services : d.open_ports.map((p) => ({ port: p, name: "HTTP", description: "เว็บ", note: null })));
 const runtimeOf = (d) => d.runtime || (d.php_version ? `PHP ${d.php_version}` : (d.server || null));
 const isNode = (d) => /node/i.test(d.runtime || "");
 const isPHP = (d) => !!d.php_version || /php/i.test(d.runtime || "");
-const hasFilter = (d, k) => k === "all" || (k === "urgent" && d.severity === "critical") || (k === "fix" && (d.severity === "high" || d.severity === "low")) || (k === "ok" && d.severity === "safe") || (k === "php" && isPHP(d)) || (k === "node" && isNode(d)) || (k === "caution" && services(d).some((x) => x.note));
+const hasFilter = (d, k) => k === "all"
+  || (k === "affected" && d.php_status === "affected") || (k === "unverified" && (d.php_status === "unverified" || d.php_status === "likely")) || (k === "fixedst" && d.php_status === "fixed")
+  || (k === "urgent" && d.severity === "critical") || (k === "fix" && (d.severity === "high" || d.severity === "low")) || (k === "ok" && d.severity === "safe")
+  || (k === "php" && isPHP(d)) || (k === "node" && isNode(d)) || (k === "caution" && services(d).some((x) => x.note));
 function filteredDevices() {
   const q = R.q.trim().toLowerCase();
   return R.job.devices.filter((d) => hasFilter(d, R.f) && (!q || [d.ip, d.hostname, d.mac, d.php_version, d.runtime, d.server, d.cms, d.device_type, devType(d.device_type), (PH[d.php_status]||{}).word,
@@ -1164,12 +1170,27 @@ async function viewReportLatest(_, alive) {
 async function viewReport([id], alive) {
   const j = await api(`/api/scans/${id}`);
   if (!alive()) return;
-  const c = counts(j), act = j.devices.filter((d) => d.severity !== "safe").sort((a, b) => SEV[a.severity].rank - SEV[b.severity].rank), demo = !!j.demo_scenario;
+  const demo = !!j.demo_scenario;
   const watch = j.devices.flatMap((d) => services(d).filter((x) => x.note).map((x) => ({ d, x })));
   const pill = (sev) => `<span class="badge ${SEV[sev].cls}">${SEV[sev].word}</span>`;
-  const summary = !j.devices.length ? "ไม่พบเครื่องที่ออนไลน์ในช่วงที่ตรวจ"
-    : act.length ? `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ พบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง ${c.critical ? `<b style="color:var(--crit)">${num(c.critical)} เครื่องมีช่องโหว่ PHP2Shell ที่ต้องแก้ไขโดยด่วน</b> ` : ""}${c.high + c.low ? `และอีก ${num(c.high + c.low)} เครื่องควรปรับปรุง ` : ""}แนะนำให้แก้เครื่องที่ต้องแก้ด่วนก่อน แล้วสั่งตรวจซ้ำเพื่อยืนยัน`
-      : `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ พบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง ไม่พบเครื่องที่มีความเสี่ยง PHP2Shell ณ เวลาที่ตรวจ`;
+  const phPill = (st) => (PH[st] ? `<span class="badge ${PH[st].cls}">${PH[st].word}</span>` : "—");
+  // group by the four assurance statuses (the document's model)
+  const st = { affected: 0, likely: 0, fixed: 0, unverified: 0, none: 0 };
+  j.devices.forEach((d) => { st[d.php_status] = (st[d.php_status] || 0) + 1; });
+  const rank = { affected: 0, likely: 1, unverified: 2, fixed: 3, none: 4 };
+  const act = j.devices.filter((d) => ["affected", "likely", "unverified"].includes(d.php_status))
+    .sort((a, b) => rank[a.php_status] - rank[b.php_status]);
+  const verified = j.devices.filter((d) => d.verification);
+  const unreach = Math.max(0, j.progress.total_ips - j.devices.length);
+  const needFix = st.affected, needCheck = st.unverified + st.likely;
+  const summary = !j.devices.length ? "ไม่พบเครื่องที่ยืนยันได้ว่าออนไลน์ในช่วงที่ตรวจ"
+    : `จากการตรวจ ${num(j.progress.total_ips)} ที่อยู่ ยืนยันพบเครื่องออนไลน์ ${num(j.devices.length)} เครื่อง`
+      + (unreach ? ` และ<b>ยังเข้าไม่ถึงอีก ${num(unreach)} เครื่อง</b> (ปิดอยู่หรือ firewall — ยังไม่สรุปว่าปลอดภัย)` : "")
+      + ". "
+      + (needFix ? `<b style="color:var(--crit)">ยืนยันได้รับผลกระทบ php2shell ${num(needFix)} เครื่อง</b> ควรแก้ไขก่อน · ` : "")
+      + (needCheck ? `<b style="color:var(--warn)">ยังยืนยันไม่ได้ ${num(needCheck)} เครื่อง</b> ต้องตรวจเวอร์ชันบนเครื่อง (อย่าเพิ่งถือว่าปลอดภัย) · ` : "")
+      + (st.fixed ? `มีหลักฐานว่าแก้แล้ว ${num(st.fixed)} เครื่อง` : "")
+      + (!needFix && !needCheck ? "ไม่พบเครื่องที่ยืนยันว่าได้รับผลกระทบ แต่ส่วนที่เข้าไม่ถึงยังไม่นับว่าปลอดภัย" : "");
   render(`<div class="app" style="padding-top:0">
     <div class="noprint in1" style="width:min(860px,100%);margin:8px auto 0;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px">
       <a class="btn" href="#/results/${esc(j.id)}">${ic("back", 17)}กลับไปที่ผลการสแกน</a>
@@ -1181,23 +1202,28 @@ async function viewReport([id], alive) {
           <p class="muted" style="margin-top:6px;font-size:13.5px">ช่วงที่ตรวจ <span class="num">${esc(j.target_label)}</span> · ${esc(fmtDate(j.created_at))} · ${portsChecked(j)}ใช้เวลา ${fmtDuration(j.duration_s)} · ${STATE[j.state] || esc(j.state)}</p></div>
         <div style="display:flex;align-items:center;gap:8px;flex:none"><span class="logo" style="width:34px;height:34px;border-radius:10px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:18px;height:18px"><path d="${P.shield}"/></svg></span><b>thscan</b></div></div>
       <dl class="sum4">
-        <div style="background:var(--tint)"><dt style="color:var(--blue-ink)">เครื่องที่ออนไลน์</dt><dd style="color:var(--blue-ink)">${num(j.devices.length)}<span style="font-size:12.5px;font-weight:500"> / ${num(j.progress.total_ips)}</span></dd></div>
-        <div style="background:var(--crit-bg)"><dt style="color:var(--crit)">ต้องแก้ด่วน</dt><dd style="color:var(--crit)">${num(c.critical)}</dd></div>
-        <div style="background:var(--warn-bg)"><dt style="color:var(--warn)">ควรแก้ไข</dt><dd style="color:var(--warn)">${num(c.high + c.low)}</dd></div>
-        <div style="background:var(--bg)"><dt class="muted">คะแนน (คำนวณโดย thscan)</dt><dd>${num(j.security_score)}<span style="font-size:12.5px;font-weight:500" class="muted"> · เกรด ${esc(j.security_grade)}</span></dd></div></dl>
+        <div style="background:var(--tint)"><dt style="color:var(--blue-ink)">ออนไลน์ / เข้าไม่ถึง</dt><dd style="color:var(--blue-ink)">${num(j.devices.length)}<span style="font-size:12.5px;font-weight:500"> / ${num(unreach)}</span></dd></div>
+        <div style="background:var(--crit-bg)"><dt style="color:var(--crit)">ยืนยันได้รับผลกระทบ</dt><dd style="color:var(--crit)">${num(st.affected)}</dd></div>
+        <div style="background:var(--warn-bg)"><dt style="color:var(--warn)">ยังยืนยันไม่ได้</dt><dd style="color:var(--warn)">${num(needCheck)}</dd></div>
+        <div style="background:var(--ok-bg)"><dt style="color:var(--ok)">มีหลักฐานว่าแก้แล้ว</dt><dd style="color:var(--ok)">${num(st.fixed)}</dd></div></dl>
+      <p class="muted" style="margin-top:8px;font-size:12px">คะแนน (คำนวณโดย thscan): ${num(j.security_score)} · เกรด ${esc(j.security_grade)} — ใช้ติดตามแนวโน้ม ไม่ใช่การรับรอง</p>
       <h2>สรุปสำหรับผู้บริหาร</h2><p style="font-size:14.5px;line-height:1.8">${summary}</p>
-      ${act.length ? `<h2>เครื่องที่ต้องดำเนินการ (เรียงตามความเร่งด่วน)</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>ระดับ</th><th>PHP</th><th>สิ่งที่ควรทำ</th></tr></thead><tbody>
-        ${act.map((d) => `<tr><td><b class="num">${esc(d.ip)}</b><br><span class="muted">${esc(d.hostname || "")}</span></td><td>${pill(d.severity)}</td><td class="num">${esc(d.php_version || "—")}</td><td>${esc(todoFor(d)[0])}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${act.length ? `<h2>เครื่องที่ต้องดำเนินการ</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>สถานะ php2shell</th><th>PHP</th><th>สิ่งที่ควรทำ</th></tr></thead><tbody>
+        ${act.map((d) => `<tr><td><b class="num">${esc(d.ip)}</b><br><span class="muted">${esc(d.hostname || "")}</span></td><td>${phPill(d.php_status)}</td><td class="num">${esc(d.php_version || "—")}</td><td>${esc(d.php_status === "unverified" ? "ตรวจเวอร์ชันบนเครื่องด้วย php -v / รายการแพ็กเกจ แล้วบันทึกการยืนยันภายใน" : todoFor(d)[0])}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${verified.length ? `<h2>หลักฐานการยืนยันภายใน</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>สถานะ</th><th>เวอร์ชัน/แพ็กเกจ</th><th>backport</th><th>runtime/container</th><th>วิธี · ผู้ตรวจ · เวลา</th><th>ไม่ครอบคลุม</th></tr></thead><tbody>
+        ${verified.map((d) => { const v = d.verification; return `<tr><td class="num">${esc(d.ip)}</td><td>${phPill(d.php_status)}</td><td class="num">${esc(v.measured_version || "—")}${v.package_release ? `<br><span class="muted">${esc(v.package_release)}</span>` : ""}</td><td>${v.backport_fixed ? "ใช่" : "—"}</td><td>${esc(v.runtime || runtimeOf(d) || "—")}${v.container ? `<br><span class="muted">${esc(v.container)}</span>` : ""}</td><td>${esc(v.method || "—")}${v.verifier ? ` · ${esc(v.verifier)}` : ""}${v.verified_at ? `<br><span class="muted">${esc(fmtDate(v.verified_at))}</span>` : ""}</td><td>${esc(v.not_covered || "—")}</td></tr>`; }).join("")}</tbody></table></div>` : ""}
       ${watch.length ? `<h2>พอร์ตที่ควรตรวจสอบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>เครื่อง</th><th>พอร์ต</th><th>ข้อแนะนำ</th></tr></thead><tbody>
         ${watch.map(({ d, x }) => `<tr><td class="num">${esc(d.ip)}</td><td><span class="badge b-warn">${x.port} · ${esc(x.name)}</span></td><td>${esc(x.note)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      ${j.devices.length ? `<h2>เครื่องทั้งหมดที่ตรวจพบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>IP</th><th>ชื่อโฮสต์</th><th>Runtime</th><th>พอร์ตที่เปิด</th><th>ผล</th></tr></thead><tbody>
-        ${j.devices.map((d) => `<tr><td class="num">${esc(d.ip)}</td><td>${esc(d.hostname || "—")}</td><td>${esc(devType(d.device_type))}</td><td>${esc(runtimeOf(d) || devType(d.device_type))}</td><td class="num">${esc(services(d).map((x) => x.port).join(", ") || "—")}</td><td>${pill(d.severity)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      <h2>อ่านรายงานนี้อย่างไร</h2>
-      <dl style="margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;font-size:13px;line-height:1.6">
-        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--crit-line)"><dt>${pill("critical")}</dt><dd style="margin:6px 0 0">ใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell ผู้ไม่หวังดีอาจสั่งงานเครื่องได้</dd></div>
-        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--warn-line)"><dt>${pill("low")}</dt><dd style="margin:6px 0 0">ความเสี่ยงรองลงมา หรือพอร์ตที่ควรจำกัดผู้เข้าถึง</dd></div>
-        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--ok-line)"><dt>${pill("safe")}</dt><dd style="margin:6px 0 0">ไม่พบช่องโหว่ PHP2Shell ณ เวลาที่ตรวจ</dd></div></dl>
-      <p class="muted" style="margin-top:18px;font-size:12.5px;line-height:1.75">PHP รุ่นที่แก้ไขแล้ว: 8.5.12, 8.4.27, 8.3.36, 8.2.35 ขึ้นไป · ผลมาจากการตรวจแบบไม่ทำลายระบบ ณ เวลาที่ระบุ · พอร์ตที่เปิดไม่ถือเป็นช่องโหว่ · คะแนนคำนวณโดย thscan ไม่ใช่การรับรองจาก ThaiCERT หรือหน่วยงานใด</p>
+      ${j.devices.length ? `<h2>เครื่องทั้งหมดที่ตรวจพบ</h2><div class="scroll"><table class="tbl"><thead><tr><th>IP</th><th>ชื่อโฮสต์</th><th>Runtime</th><th>พอร์ตที่เปิด</th><th>สถานะ php2shell</th></tr></thead><tbody>
+        ${j.devices.map((d) => `<tr><td class="num">${esc(d.ip)}</td><td>${esc(d.hostname || "—")}</td><td>${esc(runtimeOf(d) || devType(d.device_type))}</td><td class="num">${esc(services(d).map((x) => x.port).join(", ") || "—")}</td><td>${phPill(d.php_status)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="muted" style="margin-top:6px;font-size:12px">หมายเหตุความครอบคลุม: ยังเข้าไม่ถึง ${num(unreach)} ที่อยู่ (ปิดอยู่/firewall) — ไม่นับรวมในตารางนี้ และยังไม่สรุปว่าปลอดภัย</p>` : ""}
+      <h2>อ่านรายงานนี้อย่างไร (4 สถานะ)</h2>
+      <dl style="margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;font-size:13px;line-height:1.6">
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--crit-line)"><dt>${phPill("affected")}</dt><dd style="margin:6px 0 0">ยืนยันว่าใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell (RCE) — แก้ไขโดยด่วน</dd></div>
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--warn-line)"><dt>${phPill("likely")}</dt><dd style="margin:6px 0 0">เวอร์ชันไม่ชัดเจน (สาขาใหม่กว่าประกาศ) ควรตรวจยืนยัน</dd></div>
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--warn-line)"><dt>${phPill("unverified")}</dt><dd style="margin:6px 0 0">พบ PHP แต่ซ่อนเวอร์ชัน ตรวจจากภายนอกไม่สรุป — ต้องตรวจบนเครื่อง (ไม่ใช่ปลอดภัย)</dd></div>
+        <div style="padding:12px 14px;border-radius:14px;border:1px solid var(--ok-line)"><dt>${phPill("fixed")}</dt><dd style="margin:6px 0 0">เวอร์ชันอยู่ที่รุ่นแพตช์ หรือยืนยันภายในแล้ว (รวม backport)</dd></div></dl>
+      <p class="muted" style="margin-top:18px;font-size:12.5px;line-height:1.75">PHP รุ่นที่แก้ไขแล้ว: 8.5.12, 8.4.27, 8.3.36, 8.2.35 ขึ้นไป · ผลตรวจจากภายนอกอิงเลขเวอร์ชัน — ถ้า distro ทำ backport แพตช์โดยไม่เปลี่ยนเลขเวอร์ชัน ให้ยืนยันบนเครื่อง · “ยังยืนยันไม่ได้” และ “ยังเข้าไม่ถึง” ไม่นับว่าปลอดภัย · ผลมาจากการตรวจแบบไม่ทำลายระบบ (ไม่ทดสอบ exploit) ณ เวลาที่ระบุ · คะแนนคำนวณโดย thscan ไม่ใช่การรับรองจาก ThaiCERT หรือหน่วยงานใด</p>
       <div class="muted" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;margin-top:28px;padding-top:12px;border-top:1px solid var(--line);font-size:12px"><span>thscan v${esc(cfg.version)} · ติดตั้งและดูแลโดยหน่วยงาน</span><span>พิมพ์เมื่อ ${esc(fmtDate(new Date().toISOString(), { dateStyle: "medium" }))}</span></div>
     </div></article></div>`);
   $("#print").addEventListener("click", () => print());
