@@ -300,10 +300,14 @@ def build_demo_devices(scenario_id: str, suffixes: List[str]) -> List[Device]:
             severity = vuln_rules.device_severity(findings)
             service = "HTTPS" if has_tls else "HTTP"
             runtime = vuln_rules.runtime_label(headers, body, php_ver)
+            pv = vuln_rules.parse_php_version(f"PHP/{php_ver}") if php_ver else None
+            php_status = vuln_rules.php2shell_status(
+                pv, bool(php_ver) or any(f.rule_id == "php-undetermined" for f in findings))
         else:
             findings, php_ver, cms, server, runtime = [], None, None, None, None
             severity = Severity.safe
             service = "ไม่มีบริการเว็บ"
+            php_status = "none"
 
         hostname = item.get("hostname")
         matched = dns_resolver.match_suffix(hostname, suffixes)
@@ -328,6 +332,7 @@ def build_demo_devices(scenario_id: str, suffixes: List[str]) -> List[Device]:
                 ],
                 latency_ms=item.get("latency_ms", 2),
                 severity=severity,
+                php_status=php_status,
                 assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
                 findings=findings,
                 headers=headers,
@@ -382,6 +387,8 @@ def apply_patch_to_device(device: Device) -> Device:
     device.headers = new_headers
     device.findings = findings
     device.severity = severity
+    pv = vuln_rules.parse_php_version(f"PHP/{php_ver}") if php_ver else None
+    device.php_status = vuln_rules.php2shell_status(pv, bool(php_ver))
     device.assessment = vuln_rules.thaicert_assessment(severity, True, findings)
     device.patched_at = datetime.now(timezone.utc).isoformat()
     return device

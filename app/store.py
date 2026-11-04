@@ -11,13 +11,16 @@ from typing import Dict, List, Optional
 from .audit import AuditLog
 from .config import Settings
 from .models import (
+    Confidence,
     Device,
+    Finding,
     JobState,
     ScanJob,
     ScanProgress,
     ScanRequest,
     ScheduleCreate,
     ScheduleItem,
+    Verification,
     Severity,
 )
 from .scanner import demo_scenarios
@@ -199,6 +202,64 @@ class JobStore:
         self._export(job)
         return {"device": device, "simulated": simulated, "online": online,
                 "severity_before": before.value}
+
+    async def apply_verification(self, job_id: str, ip: str, payload: "Verification") -> Optional[dict]:
+        """Record an authorized internal check (version/package/backport evidence)
+        and update the host's php2shell status from it. Non-destructive: it only
+        stores what the operator attests and recomputes the conclusion."""
+        from .scanner import vuln_rules as vr
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+        idx = next((i for i, d in enumerate(job.devices) if d.ip == ip), None)
+        if idx is None:
+            return None
+        d = job.devices[idx]
+        before = d.php_status
+        payload.verified_at = datetime.now(timezone.utc).isoformat()
+        if payload.measured_version:
+            payload.measured_version = payload.measured_version.strip()
+        status = vr.status_from_evidence(payload.measured_version, payload.backport_fixed)
+        d.verification = payload
+        d.php_status = status
+        if payload.measured_version:
+            d.php_version = payload.measured_version
+
+        # reflect the internal conclusion in findings/severity
+        keep = [f for f in d.findings if f.rule_id not in ("php2shell", "php-undetermined", "php-eol")]
+        if status == "fixed":
+            d.findings = keep
+            d.severity = vr.device_severity(keep)
+            d.assessment = ("ยืนยันภายในแล้วว่าแก้ไข/แพตช์แล้ว"
+                            + (f" (PHP {payload.measured_version})" if payload.measured_version else "")
+                            + (" · backport" if payload.backport_fixed else ""))
+        elif status == "affected":
+            keep.append(Finding(
+                rule_id="php2shell", title="PHP2Shell — ยืนยันจากการตรวจภายใน",
+                severity=Severity.critical, confidence=Confidence.confirmed,
+                description="ยืนยันจากการตรวจภายในว่าเวอร์ชัน PHP ยังเสี่ยง php2shell (CVSS 9.2)",
+                evidence=f"ตรวจภายใน: PHP {payload.measured_version or '—'}"
+                         + (f" · {payload.package_release}" if payload.package_release else ""),
+                recommendation="อัปเดต PHP เป็น 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 ขึ้นไป (หรือ backport ของ distro)",
+                cve=list(vr.PHP2SHELL_CVES), cvss=9.2, cwe="CWE-787"))
+            d.findings = keep
+            d.severity = Severity.critical
+            d.assessment = "ยืนยันภายในว่าได้รับผลกระทบ php2shell — ต้องแก้ไขโดยด่วน"
+        else:  # likely / unverified / none
+            d.findings = keep
+            d.severity = vr.device_severity(keep)
+            d.assessment = vr.PHP_STATUS.get(status, ("", ""))[0]
+
+        order = {Severity.critical: 0, Severity.high: 1, Severity.low: 2, Severity.safe: 3}
+        job.devices.sort(key=lambda x: (order[x.severity], 0 if (x.php_version or x.open_ports) else 1,
+                                        [int(o) for o in x.ip.split(".")]))
+        job.progress.risks = sum(1 for x in job.devices if x.severity != Severity.safe)
+        self.audit.record("device_verified", job_id=job_id, ip=ip,
+                          status_before=before, status_after=status,
+                          php_version=payload.measured_version, method=payload.method,
+                          verifier=payload.verifier, backport=payload.backport_fixed)
+        self._export(job)
+        return {"device": d, "status": status, "status_before": before}
 
     def list_schedules(self) -> List[ScheduleItem]:
         return list(self._schedules.values())

@@ -7,14 +7,14 @@ import json
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import settings
-from .models import ScanRequest, ScheduleCreate
-from .scanner import demo_scenarios, discovery, netlimit, ports, sites
+from .models import ScanRequest, ScheduleCreate, Verification
+from .scanner import demo_scenarios, discovery, netlimit, ports, sites, vuln_rules
 from .scanner.ip_utils import TargetError, expand_targets, out_of_scope
 from .scanner import nmap_scan
 from .scheduler import CronError, Scheduler, local_tz, parse_cron
@@ -240,6 +240,37 @@ async def recheck_device(job_id: str, ip: str) -> dict:
     }
 
 
+_VERIFY_FIELDS = ("measured_version", "package_release", "runtime", "container",
+                  "backport_fixed", "evidence", "method", "verifier", "not_covered")
+
+
+@app.post("/api/scans/{job_id}/devices/{ip}/verify")
+async def verify_device(job_id: str, ip: str, payload: dict = Body(...)) -> dict:
+    """Record an authorized internal check and recompute the host's php2shell
+    status from the evidence. Non-destructive — stores what the operator
+    attests; no exploitation. ``inventory_text`` (paste of `php -v` /
+    `dpkg -l | grep php`) is parsed when measured_version is blank."""
+    data = {k: payload.get(k) for k in _VERIFY_FIELDS if payload.get(k) is not None}
+    verification = Verification(**data)
+    inv = payload.get("inventory_text")
+    if not verification.measured_version and inv:
+        verification.measured_version = vuln_rules.parse_inventory(inv)
+        if verification.measured_version and not verification.method:
+            verification.method = "inventory"
+    if inv:
+        verification.evidence = (verification.evidence or "") + ("\n" if verification.evidence else "") + str(inv)[:2000]
+    res = await store.apply_verification(job_id, ip, verification)
+    if res is None:
+        raise HTTPException(404, "ไม่พบอุปกรณ์หรืองานสแกน")
+    job = store.get(job_id)
+    out = job.dump_json_dict() if job else {}
+    if job:
+        out["security_score"] = job.security_score()
+        out["security_grade"] = job.security_grade()
+    return {"device": res["device"].dump_json_dict(), "status": res["status"],
+            "status_before": res["status_before"], "job": out}
+
+
 def _csv_cell(value: object) -> str:
     """Neutralise spreadsheet formulas (hostnames come from untrusted DNS)."""
     text = "" if value is None else str(value)
@@ -267,14 +298,20 @@ async def export_csv(job_id: str) -> Response:
             "open_ports",
             "open_services",
             "latency_ms",
+            "php2shell_status",
             "severity",
             "assessment",
+            "verified_version",
+            "verified_backport",
+            "verified_by",
+            "verified_at",
             "cve",
         ]
     )
     for d in job.devices:
         cves = " ".join(sorted({c for f in d.findings for c in f.cve}))
-        writer.writerow(_csv_cell(v) for v in
+        v = d.verification
+        writer.writerow(_csv_cell(x) for x in
             [
                 d.ip,
                 d.hostname or "",
@@ -287,8 +324,13 @@ async def export_csv(job_id: str) -> Response:
                 " ".join(str(p) for p in d.open_ports),
                 " ".join(f"{x.port}/{x.name}" for x in d.services),
                 d.latency_ms if d.latency_ms is not None else "",
+                d.php_status,
                 d.severity.value,
                 d.assessment,
+                (v.measured_version or "") if v else "",
+                ("yes" if v and v.backport_fixed else "") if v else "",
+                (v.verifier or "") if v else "",
+                (v.verified_at or "") if v else "",
                 cves,
             ]
         )

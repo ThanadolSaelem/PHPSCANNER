@@ -75,6 +75,23 @@ class RouteHop(CompatBaseModel):
     rtt_ms: Optional[float] = None
 
 
+class Verification(CompatBaseModel):
+    """Evidence from an authorized internal check (operator runs `php -v` /
+    reads the package list on the box or a snapshot and records it here).
+    Non-destructive: thscan stores what the operator attests, it does not
+    guess distro backports."""
+    measured_version: Optional[str] = None   # e.g. "8.2.35" from `php -v`
+    package_release: Optional[str] = None    # e.g. "php8.1 8.1.2-1ubuntu2.19"
+    runtime: Optional[str] = None            # the PHP runtime actually serving
+    container: Optional[str] = None          # related container/image, if any
+    backport_fixed: bool = False             # distro backported the fix
+    evidence: Optional[str] = None           # reference / advisory / notes
+    method: Optional[str] = None             # "php -v" | "dpkg -l" | "agent" | …
+    verifier: Optional[str] = None           # who verified
+    not_covered: Optional[str] = None        # parts not checked / not covered
+    verified_at: Optional[str] = None
+
+
 class ServicePort(CompatBaseModel):
     port: int
     name: str
@@ -100,6 +117,10 @@ class Device(CompatBaseModel):
     services: List[ServicePort] = Field(default_factory=list)  # every open TCP port found
     latency_ms: Optional[int] = None
     severity: Severity = Severity.safe
+    # the php2shell conclusion, kept separate from severity so "cannot verify"
+    # is never folded into "safe": affected | likely | fixed | unverified | none
+    php_status: str = "none"
+    verification: Optional[Verification] = None  # authorized internal evidence
     assessment: str = ""
     findings: List[Finding] = Field(default_factory=list)
     headers: Dict[str, str] = Field(default_factory=dict)
@@ -186,9 +207,11 @@ class ScanJob(CompatBaseModel):
 
     def summary(self) -> Dict:
         sev_counts: Dict[str, int] = {s.value: 0 for s in Severity}
+        status_counts: Dict[str, int] = {k: 0 for k in ("affected", "likely", "fixed", "unverified", "none")}
         php_servers = 0
         for d in self.devices:
             sev_counts[d.severity.value] += 1
+            status_counts[d.php_status] = status_counts.get(d.php_status, 0) + 1
             if d.php_version or d.open_ports:
                 php_servers += 1
         return {
@@ -198,7 +221,11 @@ class ScanJob(CompatBaseModel):
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "progress": self.progress.dump_json_dict(),
             "severity_counts": sev_counts,
+            "status_counts": status_counts,
             "online": len(self.devices),
+            # hosts we could not confirm exist (down OR firewalled) — kept
+            # distinct from "checked, nothing found", per the coverage guidance
+            "unreachable": max(0, self.progress.total_ips - len(self.devices)),
             "risks": sum(1 for d in self.devices if d.severity != Severity.safe),
             "php_servers": php_servers,
             "target_label": self.target_label,

@@ -280,13 +280,16 @@ class ScanEngine:
                 other_open = [p for p in found if p not in web_ports]
                 severity = vuln_rules.device_severity(findings) if (has_web or findings) else Severity.safe
                 service = ("HTTPS" if has_tls else "HTTP") if has_web else "ไม่มีบริการเว็บ"
+                pv = vuln_rules.parse_php_version(f"PHP/{php_version}") if php_version else None
+                php_seen = bool(php_version) or any(f.rule_id == "php-undetermined" for f in findings)
+                php_status = vuln_rules.php2shell_status(pv, php_seen)
                 devices.append(Device(
                     ip=ip, hostname=hostname, matched_suffix=matched_suffix, up=True,
                     mac=arp.get(ip),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
                     service=service, php_version=php_version, server=server, cms=cms, runtime=runtime,
                     open_ports=sorted(web_open), services=services, latency_ms=latency,
-                    severity=severity,
+                    severity=severity, php_status=php_status,
                     assessment=vuln_rules.thaicert_assessment(severity, has_web, findings),
                     findings=findings, headers=merged_headers,
                 ))

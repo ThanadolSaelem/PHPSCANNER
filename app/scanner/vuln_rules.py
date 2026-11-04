@@ -148,6 +148,71 @@ def assess_php2shell(
     )
 
 
+# The document's four assurance statuses — kept distinct so "cannot verify yet"
+# is never reported as "safe". (label, short meaning)
+PHP_STATUS = {
+    "affected":   ("ยืนยันได้รับผลกระทบ", "เวอร์ชันต่ำกว่ารุ่นที่แพตช์ / สาขาหมดอายุ"),
+    "likely":     ("อาจได้รับผลกระทบ", "เวอร์ชันไม่ชัดเจน ควรตรวจยืนยัน"),
+    "fixed":      ("มีหลักฐานว่าแก้ไขแล้ว", "เวอร์ชันอยู่ที่รุ่นแพตช์ หรือยืนยันบนเครื่องแล้ว"),
+    "unverified": ("ยังยืนยันไม่ได้", "พบ PHP แต่ซ่อนเวอร์ชัน ต้องตรวจบนเครื่อง"),
+    "none":       ("ไม่พบ PHP", "ไม่มีบริการ PHP/เว็บ ที่เกี่ยวข้องกับ php2shell"),
+}
+
+# version-based detection cannot see a distro backport (a fix applied without
+# bumping the upstream number), so an "affected" verdict always carries this.
+BACKPORT_CAVEAT = (
+    "หมายเหตุ: ผลนี้อิงเลขเวอร์ชันจากภายนอก — ถ้า distro ทำ backport แพตช์โดยไม่เปลี่ยน"
+    "เลขเวอร์ชัน (เช่น Ubuntu/RHEL) เครื่องอาจไม่เสี่ยงจริง ให้ยืนยันบนเครื่องด้วย `php -v` "
+    "และรายการแพ็กเกจ แล้วบันทึกการยืนยันภายใน"
+)
+
+
+def php2shell_status(version: Optional[PhpVersion], php_seen: bool) -> str:
+    """Map a reading to one of the four assurance statuses."""
+    if version is None:
+        return "unverified" if php_seen else "none"
+    branch = (version.major, version.minor)
+    fixed = PHP2SHELL_FIXED.get(branch)
+    if fixed is not None:
+        return "affected" if version.as_tuple() < fixed else "fixed"
+    if branch < PHP2SHELL_OLDEST_FIXED_BRANCH:
+        return "affected"            # EOL branch — no upstream patch exists
+    return "likely"                  # newer than the announcement — uncertain
+
+
+_INV_VER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def parse_inventory(text: str) -> Optional[str]:
+    """Pull a PHP version from pasted inventory output — `php -v`, `dpkg -l |
+    grep php`, `rpm -qa | grep php` — the agentless-equivalent of a snapshot
+    read. Returns the lowest PHP version found (most conservative), or None."""
+    found = []
+    for line in (text or "").splitlines():
+        if "php" not in line.lower():
+            continue
+        for m in _INV_VER.finditer(line):
+            v = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if 4 <= v[0] <= 9:  # a plausible PHP major
+                found.append(v)
+    if not found:
+        return None
+    lo = min(found)
+    return f"{lo[0]}.{lo[1]}.{lo[2]}"
+
+
+def status_from_evidence(measured_version: Optional[str], backport_fixed: bool) -> str:
+    """Conclude a status from an authorized internal check. The operator's
+    attestation (backport_fixed) is trusted; otherwise the measured version is
+    compared to the upstream fix."""
+    if backport_fixed:
+        return "fixed"
+    pv = parse_php_version(f"PHP/{measured_version}") if measured_version else None
+    if pv is None:
+        return "unverified"
+    return php2shell_status(pv, True)
+
+
 def detect_cms(body: str, headers: Dict[str, str]) -> Optional[str]:
     text = body[:200_000].lower()
     gen = headers.get("x-generator", "").lower()
@@ -199,10 +264,12 @@ def evaluate(
                 severity=Severity.critical,
                 confidence=verdict.confidence,
                 description="PHP2Shell เป็นช่องโหว่ memory-safety ใน PHP core (CVSS 9.2) "
-                "ที่อาจทำให้รันโค้ดจากระยะไกลโดยไม่ต้องยืนยันตัวตน " + verdict.detail,
+                "ที่อาจทำให้รันโค้ดจากระยะไกลโดยไม่ต้องยืนยันตัวตน " + verdict.detail
+                + " · " + BACKPORT_CAVEAT,
                 evidence=evidence or verdict.detail,
                 recommendation="อัปเดต PHP เป็นรุ่นที่แพตช์: 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 "
-                "หรือใหม่กว่าในสาขาเดียวกัน (สาขา EOL ให้ย้ายไปรุ่นที่รองรับ)",
+                "หรือใหม่กว่าในสาขาเดียวกัน (สาขา EOL ให้ย้ายไปรุ่นที่รองรับ) — "
+                "ถ้าใช้แพ็กเกจของ distro ให้ยืนยันว่าได้รับ backport แพตช์แล้วบนเครื่อง",
                 cve=list(PHP2SHELL_CVES),
                 cvss=9.2,
                 cwe="CWE-787",
