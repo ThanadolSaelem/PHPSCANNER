@@ -126,3 +126,15 @@ def test_device_severity_and_assessment():
     # no web service -> safe LAN message
     assert "LAN" in vr.thaicert_assessment(Severity.safe, False, [])
     assert vr.device_severity([]) == Severity.safe
+
+
+def test_hidden_cms_is_not_scored_safe():
+    # a WordPress site with no X-Powered-By and no .php link: the CMS itself
+    # proves PHP, so it must be "undetermined", never "none"/safe
+    findings, ver, cms, _ = vr.evaluate(
+        scheme="https",
+        headers={"server": "Apache/2.4.62", "set-cookie": "wordpress_test_cookie=1; path=/"},
+        body='<meta name="generator" content="WordPress 6.6"><link href="/wp-content/x.css">')
+    assert ver is None and cms == "WordPress"
+    assert any(f.rule_id == "php-undetermined" for f in findings)
+    assert vr.php2shell_status(None, True) == "unverified"

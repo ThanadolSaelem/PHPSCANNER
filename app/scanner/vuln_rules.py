@@ -243,8 +243,13 @@ def evaluate(
     # (PHPSESSID, a .php page, PHP errors) so a site that hides its version is
     # never scored "safe" just because the banner is clean.
     sig_present, sig_evidence = php_signals(headers, body, final_url)
-    seen = php_present(server, powered_by) or sig_present
     cms = detect_cms(body, headers)
+    # WordPress / Joomla / Drupal / Laravel / Moodle / Nextcloud are all PHP
+    # apps, so a detected CMS is itself proof PHP is present — a CMS whose
+    # version is hidden must not be scored "safe".
+    if cms and not sig_present:
+        sig_present, sig_evidence = True, f"ตรวจพบ {cms}"
+    seen = php_present(server, powered_by) or sig_present
     evidence = "; ".join(
         filter(
             None,

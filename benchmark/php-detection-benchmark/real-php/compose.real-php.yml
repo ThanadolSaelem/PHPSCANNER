@@ -1,0 +1,35 @@
+name: php-detection-benchmark-realphp
+
+# OPTIONAL authenticity layer: real PHP runtimes reporting real versions, so a
+# tool can be checked against genuine X-Powered-By banners (not just fixtures).
+# All ports bound to 127.0.0.1 only. Pin each image to a digest before relying
+# on it (official tags move). Verify the running version with, e.g.:
+#   docker compose -f real-php/compose.real-php.yml exec php-82-vuln \
+#     php -r 'echo PHP_VERSION, "\n";'
+#
+# Note: the official php:* images carry UPSTREAM versions, which do NOT model a
+# distro backport. For the backport case (old number, actually patched) build
+# ubuntu-backport/ below from a distro package and confirm its version yourself.
+x-def: &def
+  restart: "no"
+  init: true
+  read_only: true
+  security_opt: [ "no-new-privileges:true" ]
+  mem_limit: 256m
+  cpus: 0.50
+  pids_limit: 96
+  volumes:
+    - ./www:/var/www/html:ro
+
+services:
+  php-82-vuln:   { <<: *def, image: "php:8.2.34-apache", ports: ["127.0.0.1:9101:80"],
+                   volumes: ["./www:/var/www/html:ro", "./expose-on.ini:/usr/local/etc/php/conf.d/zz.ini:ro"] }
+  php-82-fixed:  { <<: *def, image: "php:8.2.35-apache", ports: ["127.0.0.1:9102:80"],
+                   volumes: ["./www:/var/www/html:ro", "./expose-on.ini:/usr/local/etc/php/conf.d/zz.ini:ro"] }
+  php-83-fixed:  { <<: *def, image: "php:8.3.36-apache", ports: ["127.0.0.1:9104:80"],
+                   volumes: ["./www:/var/www/html:ro", "./expose-on.ini:/usr/local/etc/php/conf.d/zz.ini:ro"] }
+  php-74-eol:    { <<: *def, image: "php:7.4-apache",    ports: ["127.0.0.1:9109:80"],
+                   volumes: ["./www:/var/www/html:ro", "./expose-on.ini:/usr/local/etc/php/conf.d/zz.ini:ro"] }
+  php-82-hidden: { <<: *def, image: "php:8.2.34-apache", ports: ["127.0.0.1:9111:80"],
+                   volumes: ["./www:/var/www/html:ro", "./expose-off.ini:/usr/local/etc/php/conf.d/zz.ini:ro"] }
+  php-backport:  { <<: *def, build: ./ubuntu-backport, ports: ["127.0.0.1:9123:80"] }

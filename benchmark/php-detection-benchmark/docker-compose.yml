@@ -1,0 +1,29 @@
+name: php-detection-benchmark
+
+# Serves the 23 canned fixtures (see cases.py) on 127.0.0.1:9001-9023.
+# The container binds 0.0.0.0 internally, but the ports are published to the
+# host's LOOPBACK only — nothing is exposed to the LAN or the internet.
+# It runs no PHP and sends no payload; it only returns fixed HTTP responses.
+services:
+  fixtures:
+    # Pin this to a digest before publishing: ./pin-digests.sh writes the
+    # @sha256:... your `docker pull` resolved, so the benchmark is reproducible.
+    image: python:3.13-slim
+    container_name: php-detection-benchmark-fixtures
+    working_dir: /lab
+    command: ["python", "fixtures.py"]
+    environment:
+      FIXTURE_BIND: "0.0.0.0"
+    volumes:
+      - ./cases.py:/lab/cases.py:ro
+      - ./fixtures.py:/lab/fixtures.py:ro
+    ports:
+      - "127.0.0.1:9001-9023:9001-9023"
+    restart: "no"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
