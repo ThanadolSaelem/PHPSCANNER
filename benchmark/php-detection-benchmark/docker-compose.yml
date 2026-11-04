@@ -11,16 +11,19 @@ services:
     image: python:3.13-slim
     container_name: php-detection-benchmark-fixtures
     working_dir: /lab
-    command: ["python", "fixtures.py"]
+    command: ["python", "range.py"]
     environment:
+      RANGE_BIND: "0.0.0.0"
       FIXTURE_BIND: "0.0.0.0"
       # set to "1" to print each incoming request (watch a scan arrive):
       FIXTURE_LOG: "0"
     volumes:
       - ./cases.py:/lab/cases.py:ro
       - ./fixtures.py:/lab/fixtures.py:ro
+      - ./range.py:/lab/range.py:ro
     ports:
-      - "127.0.0.1:9001-9023:9001-9023"
+      - "127.0.0.1:9000:9000"          # scoreboard web UI
+      - "127.0.0.1:9001-9023:9001-9023" # targets
     restart: "no"
     init: true
     read_only: true

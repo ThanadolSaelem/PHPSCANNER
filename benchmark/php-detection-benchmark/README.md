@@ -16,6 +16,16 @@ diversity (Apache mod_php, nginx+FPM, LiteSpeed, FrankenPHP), framework
 fingerprints (WordPress, Laravel), real-world obstacles (CDN-stripped, Node
 decoy, static), and the key distro-backport false-positive case.
 
+## Range + live scoreboard (Juice-Shop style)
+
+```sh
+python3 range.py      # or ./run.sh   — then open http://127.0.0.1:9000/
+```
+Scan 127.0.0.1:9001-9023, paste your `{port: status}` into the board, and it
+grades live (solved / exact / **FALSE-SAFE must be 0**). Docker: `docker compose up`.
+
+## Headless CLI scorer
+
 Runs standalone on `python3` alone (no thscan, no deps):
 
 ```sh
