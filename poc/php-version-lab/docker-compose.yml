@@ -1,0 +1,38 @@
+name: thscan-php-version-lab
+
+x-lab-defaults: &lab-defaults
+  restart: "no"
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 256m
+  cpus: 0.50
+  pids_limit: 96
+
+services:
+  php-affected-visible:
+    <<: *lab-defaults
+    image: php:8.2.34-apache@sha256:1650dcb528360aad05d6ed2f83cb403a2a39c31bd14552efd9a747b2207dea86
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./www:/var/www/html:ro
+      - ./php-config/expose-on.ini:/usr/local/etc/php/conf.d/zz-poc-expose.ini:ro
+
+  php-patched-visible:
+    <<: *lab-defaults
+    image: php:8.2.35-apache@sha256:89e5f7bde208a146519d12100c11e71a1d0119a10703cfc454d1bdca274147ec
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - ./www:/var/www/html:ro
+      - ./php-config/expose-on.ini:/usr/local/etc/php/conf.d/zz-poc-expose.ini:ro
+
+  php-affected-hidden:
+    <<: *lab-defaults
+    image: php:8.2.34-apache@sha256:1650dcb528360aad05d6ed2f83cb403a2a39c31bd14552efd9a747b2207dea86
+    ports:
+      - "127.0.0.1:8082:80"
+    volumes:
+      - ./www:/var/www/html:ro
+      - ./php-config/expose-off.ini:/usr/local/etc/php/conf.d/zz-poc-expose.ini:ro
