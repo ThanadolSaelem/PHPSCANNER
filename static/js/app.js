@@ -64,6 +64,15 @@ const SEV = {
 };
 const sevBadge = (s) => `<span class="badge ${SEV[s].cls}">${ic(SEV[s].icon, 13, 2.6)}${SEV[s].word}</span>`;
 const CONF = { confirmed: "ยืนยันแล้ว", high: "สูง", medium: "ปานกลาง", low: "ต่ำ" };
+// the four php2shell assurance statuses — "cannot verify" is never "safe"
+const PH = {
+  affected:   { word: "ยืนยันได้รับผลกระทบ", cls: "b-bad", icon: "alert" },
+  likely:     { word: "อาจได้รับผลกระทบ", cls: "b-warn", icon: "warn" },
+  unverified: { word: "ยังยืนยันไม่ได้", cls: "b-warn", icon: "warn" },
+  fixed:      { word: "มีหลักฐานว่าแก้แล้ว", cls: "b-ok", icon: "check" },
+  none:       { word: "ไม่พบ PHP", cls: "b-grey", icon: "shield" },
+};
+const phBadge = (st) => (PH[st] ? `<span class="badge ${PH[st].cls}">${ic(PH[st].icon, 13, 2.6)}${PH[st].word}</span>` : "");
 const DEVTYPE = { "Gateway Router": "เราเตอร์ / เกตเวย์", "Web Server (HTTPS)": "เว็บเซิร์ฟเวอร์ (HTTPS)", "Web Server (HTTP)": "เว็บเซิร์ฟเวอร์ (HTTP)", "LAN Device": "อุปกรณ์ในเครือข่าย" };
 const devType = (t) => DEVTYPE[t] || t || "—";
 const STATE = { queued: "รอคิว", running: "กำลังสแกน", completed: "เสร็จแล้ว", cancelled: "ยกเลิกแล้ว", failed: "ผิดพลาด" };
@@ -845,7 +854,7 @@ const isPHP = (d) => !!d.php_version || /php/i.test(d.runtime || "");
 const hasFilter = (d, k) => k === "all" || (k === "urgent" && d.severity === "critical") || (k === "fix" && (d.severity === "high" || d.severity === "low")) || (k === "ok" && d.severity === "safe") || (k === "php" && isPHP(d)) || (k === "node" && isNode(d)) || (k === "caution" && services(d).some((x) => x.note));
 function filteredDevices() {
   const q = R.q.trim().toLowerCase();
-  return R.job.devices.filter((d) => hasFilter(d, R.f) && (!q || [d.ip, d.hostname, d.mac, d.php_version, d.runtime, d.server, d.cms, d.device_type, devType(d.device_type),
+  return R.job.devices.filter((d) => hasFilter(d, R.f) && (!q || [d.ip, d.hostname, d.mac, d.php_version, d.runtime, d.server, d.cms, d.device_type, devType(d.device_type), (PH[d.php_status]||{}).word,
     ...services(d).flatMap((x) => [String(x.port), x.name]), ...d.findings.flatMap((f) => [f.title, ...f.cve])].join(" ").toLowerCase().includes(q)));
 }
 function todoFor(d) {
@@ -892,7 +901,7 @@ function renderResults() {
   ${j.note_deep ? `<p class="notice b-warn in1" style="margin-top:14px">${ic("warn", 20)}<span>${esc(j.note_deep)}</span></p>` : ""}
   ${(j.intercepted_ports || []).length ? `<p class="notice b-blue in1" style="margin-top:14px">${ic("shield", 20)}<span>พบอุปกรณ์กลางทาง (เช่น proxy หรือ firewall) ตอบแทนทุกที่อยู่บนพอร์ต <span class="mono">${esc(j.intercepted_ports.join(", "))}</span> — ระบบตัดเครื่องที่ไม่มีอยู่จริงออกให้แล้ว</span></p>` : ""}
   <dl class="card stats in2" style="margin-top:16px;margin-bottom:0">
-    <div class="stat sec"><dt class="muted">ออนไลน์ ${tip("เครื่องที่ตอบรับการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง")}</dt><dd style="color:var(--blue-ink)"><span class="cnt" data-to="${j.devices.length}">0</span><small> / ${num(j.progress.total_ips)}</small></dd></div>
+    <div class="stat sec"><dt class="muted">ออนไลน์ ${tip("เครื่องที่ตอบรับการเชื่อมต่อ และยืนยันได้ว่ามีอยู่จริง · ส่วนที่เหลือ “ยังเข้าไม่ถึง” คือยืนยันไม่ได้ว่ามีอยู่ (ปิดอยู่หรือ firewall) ไม่ใช่ว่าปลอดภัย")}</dt><dd style="color:var(--blue-ink)"><span class="cnt" data-to="${j.devices.length}">0</span><small> / ${num(j.progress.total_ips)}</small></dd>${(j.progress.total_ips - j.devices.length) > 0 ? `<small class="muted" style="display:block;margin-top:2px">ยังเข้าไม่ถึง ${num(j.progress.total_ips - j.devices.length)} เครื่อง</small>` : ""}</div>
     <div class="stat sec"><dt style="color:var(--crit)">ต้องแก้ด่วน ${tip("ใช้ PHP รุ่นที่มีช่องโหว่ PHP2Shell ผู้ไม่หวังดีอาจสั่งงานเครื่องได้ ควรอัปเดตก่อน")}</dt><dd style="color:var(--crit)"><span class="cnt" data-to="${c.critical}">0</span></dd></div>
     <div class="stat sec"><dt style="color:var(--warn)">ควรแก้ไข ${tip("ความเสี่ยงรองลงมา เช่น PHP สาขาหมดอายุ ซ่อนเวอร์ชัน หรือยังไม่เปิด HSTS")}</dt><dd style="color:var(--warn)"><span class="cnt" data-to="${c.high + c.low}">0</span></dd></div>
     <div class="stat sec" style="display:flex;align-items:center;justify-content:space-between;gap:8px"><div><dt class="muted">คะแนน ${tip("คำนวณโดย thscan: เริ่ม 100 หักเครื่องละ ด่วน 22 · สูง 14 · ต่ำ 4 ใช้ติดตามความคืบหน้า ไม่ใช่คะแนนรับรองจาก ThaiCERT")}</dt><dd><span class="cnt" data-to="${j.security_score}">0</span><small> · เกรด ${esc(j.security_grade)}</small></dd></div>
@@ -1000,7 +1009,7 @@ function paintHost() {
   const TABS = [["todo", "สิ่งที่ควรทำ", todo.length], ["find", "ที่ตรวจพบ", d.findings.length], ["ports", "พอร์ต", svc.length], ["info", "ข้อมูลเครื่อง", "·"]];
   host.innerHTML = `<div class="swap${R.swap}">
     <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">${cubeSvg(d)}
-      <div style="flex:1;min-width:200px">${sevBadge(d.severity)}
+      <div style="flex:1;min-width:200px"><span style="display:flex;flex-wrap:wrap;gap:6px">${phBadge(d.php_status)}${sevBadge(d.severity)}${d.verification ? `<span class="badge b-blue">${ic("check", 12, 2.6)}ยืนยันภายในแล้ว</span>` : ""}</span>
         <div class="big" style="margin-top:6px">${esc(d.ip)}</div>
         <div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(d.hostname || "ไม่มีชื่อโฮสต์")} · ${esc(runtimeOf(d) || devType(d.device_type))}</div></div></div>
     <div style="display:flex;gap:12px;align-items:flex-start;margin-top:14px;padding:12px 14px;border-radius:16px;background:${s.bg};color:${s.fg}">
@@ -1013,6 +1022,7 @@ function paintHost() {
   <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
   <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">
     <button type="button" class="btn" id="recheck">${ic("refresh", 17)}<span>${demo ? "จำลองการแก้ไข (ตัวอย่าง)" : "ตรวจซ้ำเครื่องนี้"}</span></button>
+    <button type="button" class="btn" id="verify">${ic("shield", 17)}<span>ยืนยันภายใน</span></button>
     <button type="button" class="btn" id="copy">${ic("copy", 17)}<span>คัดลอกสรุป</span></button>
     <span class="muted" style="font-size:12.5px">${d.checked_at ? `ตรวจซ้ำล่าสุด ${esc(fmtDate(d.checked_at))}` : d.patched_at ? `จำลองการแก้ไขเมื่อ ${esc(fmtDate(d.patched_at))} (ตัวอย่าง)` : demo ? "" : "“ตรวจซ้ำ” จะสแกนเครื่องนี้ใหม่จริงอีกครั้ง"}</span>
   </div>`;
@@ -1037,6 +1047,50 @@ function paintHost() {
       R.sel = d.ip; renderResults();
     } catch (err) { toast(err.message); b.disabled = false; label.textContent = was; }
   });
+  $("#verify").addEventListener("click", () => openVerifyForm(d));
+}
+// The internal-verification form: the operator records evidence from an
+// authorized check on the box/snapshot (no exploitation), and the status is
+// recomputed. This is the agentless-equivalent of a snapshot inventory read.
+function openVerifyForm(d) {
+  const v = d.verification || {};
+  const m = openModal(`<h2>ยืนยันภายใน · ${esc(d.ip)}</h2>
+    <p class="lead">บันทึกหลักฐานจากการตรวจบนเครื่องจริง/snapshot (อ่านอย่างเดียว ไม่ยิงอะไร) ระบบจะคำนวณสถานะ php2shell ใหม่จากหลักฐานนี้</p>
+    <div class="stag" style="margin-top:14px">
+      <label style="display:block"><span class="lbl">วางผลคำสั่ง (ไม่บังคับ) ${tip("วางผล php -v หรือ dpkg -l | grep php หรือ rpm -qa | grep php — ระบบจะอ่านเวอร์ชันให้ (เลือกรุ่นต่ำสุดเพื่อความปลอดภัย)")}</span>
+        <textarea class="inp" id="v-inv" rows="3" style="height:auto;padding:10px 12px;font-family:var(--mono);font-size:12.5px" placeholder="PHP 8.2.35 (cli) ...  หรือ  ii  php8.1  8.1.2-1ubuntu2.19 ..."></textarea></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+        <label><span class="lbl">เวอร์ชันที่ตรวจได้</span><input class="inp" id="v-ver" value="${esc(v.measured_version || "")}" placeholder="เช่น 8.2.35"></label>
+        <label><span class="lbl">ชื่อแพ็กเกจ/release</span><input class="inp" id="v-pkg" value="${esc(v.package_release || "")}" placeholder="php8.1 8.1.2-1ubuntu2.19"></label>
+        <label><span class="lbl">Container/image (ถ้ามี)</span><input class="inp" id="v-cont" value="${esc(v.container || "")}" placeholder="php:8.2-fpm"></label>
+        <label><span class="lbl">วิธีตรวจ</span><input class="inp" id="v-method" value="${esc(v.method || "")}" placeholder="php -v / agent / snapshot"></label>
+        <label><span class="lbl">ผู้ตรวจ</span><input class="inp" id="v-by" value="${esc(v.verifier || "")}" placeholder="ชื่อ/ทีม"></label>
+        <label><span class="lbl">ส่วนที่ไม่ครอบคลุม</span><input class="inp" id="v-nc" value="${esc(v.not_covered || "")}" placeholder="เช่น ยังไม่ได้ตรวจ pool ที่ 2"></label>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:14px"><input type="checkbox" id="v-bp" ${v.backport_fixed ? "checked" : ""} style="width:18px;height:18px"> distro ยืนยันว่าได้รับ backport แพตช์แล้ว (แม้เลขเวอร์ชันจะต่ำ) ${tip("ถ้าติ๊ก ระบบถือว่า “แก้ไขแล้ว” ตามที่คุณยืนยัน — thscan ไม่เดา backport เอง")}</label>
+      <label style="display:block;margin-top:10px"><span class="lbl">หลักฐาน/อ้างอิง</span><input class="inp" id="v-ev" value="${esc(v.evidence || "")}" placeholder="เช่น USN-xxxx, เลขแพตช์, ลิงก์"></label>
+    </div>
+    <div class="modal-foot"><button type="button" class="btn" data-close>ยกเลิก</button><button type="button" class="btn btn-g" data-go>${ic("check", 17)}บันทึกและคำนวณสถานะ</button></div>`, "ยืนยันภายใน");
+  $("[data-go]", m.el).addEventListener("click", async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    const body = {
+      inventory_text: $("#v-inv", m.el).value.trim() || undefined,
+      measured_version: $("#v-ver", m.el).value.trim() || undefined,
+      package_release: $("#v-pkg", m.el).value.trim() || undefined,
+      container: $("#v-cont", m.el).value.trim() || undefined,
+      method: $("#v-method", m.el).value.trim() || undefined,
+      verifier: $("#v-by", m.el).value.trim() || undefined,
+      not_covered: $("#v-nc", m.el).value.trim() || undefined,
+      backport_fixed: $("#v-bp", m.el).checked,
+      evidence: $("#v-ev", m.el).value.trim() || undefined,
+    };
+    try {
+      const res = await api(`/api/scans/${R.job.id}/devices/${encodeURIComponent(d.ip)}/verify`, { method: "POST", body: JSON.stringify(body) });
+      R.job = res.job; R.sel = d.ip; m.close();
+      toast(res.status === res.status_before ? `บันทึกแล้ว · สถานะ “${PH[res.status].word}”` : `บันทึกแล้ว · ${PH[res.status_before] ? PH[res.status_before].word : res.status_before} → ${PH[res.status].word}`);
+      renderResults();
+    } catch (err) { toast(err.message); btn.disabled = false; }
+  });
 }
 function paintTabs() {
   const d = R.job.devices.find((x) => x.ip === R.sel);
@@ -1057,7 +1111,8 @@ function paintTabs() {
       <p class="sec" style="margin-top:10px;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px">พอร์ตที่ควรระวังไม่ใช่ช่องโหว่ และไม่ลดคะแนน ${tip("พอร์ตที่เปิดอยู่อาจจำเป็นต่อการใช้งาน ระบบแค่เตือนให้ตรวจดูว่าควรจำกัดผู้เข้าถึงหรือไม่")}</p>`
       : `<p class="muted" style="font-size:14px">ไม่พบพอร์ตที่เปิด${(R.job.scanned_ports || []).length ? ` จาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ` : ""}</p>`;
   } else {
-    const kv = [["IP", d.ip, ""], ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
+    const kv = [["IP", d.ip, ""], ["สถานะ php2shell", (PH[d.php_status] || {}).word || "—", "ยืนยันได้รับผลกระทบ / อาจได้รับผลกระทบ / แก้แล้วมีหลักฐาน / ยังยืนยันไม่ได้ — “ยังยืนยันไม่ได้” ไม่นับเป็นปลอดภัย"],
+      ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
       ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นเฉพาะเครื่องในวง LAN เดียวกับเครื่องที่รัน thscan"], ["ประเภท", devType(d.device_type), "คาดเดาจากบริการที่เปิดอยู่ อาจไม่แม่นยำ 100%"],
       ["Runtime", runtimeOf(d) || "—", "ซอฟต์แวร์ที่ให้บริการเว็บ เช่น PHP, Node.js/Express หรือเว็บเซิร์ฟเวอร์ (nginx/Apache)"], ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
       ["CMS", d.cms || "—", ""], ["พอร์ตเว็บ", d.open_ports.join(", ") || "—", "พอร์ตที่ตอบกลับเป็นเว็บจริงระหว่างการสแกน"],
@@ -1066,7 +1121,9 @@ function paintTabs() {
     html = `<dl class="kv">${kv.map(([k, v, h]) => `<div class="sec"><dt>${k}${h ? ` ${tip(h)}` : ""}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
       ${headers.length ? `<details class="raw"><summary>ดู header ที่เว็บตอบกลับ (สำหรับเจ้าหน้าที่เทคนิค)</summary><div class="evidence">${esc(headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</div></details>` : ""}
       ${(d.route && d.route.length) ? `<div class="sec" style="margin-top:12px"><div class="lbl">เส้นทางเครือข่าย (traceroute) ${tip("ลำดับอุปกรณ์ (hop) ที่แพ็กเก็ตวิ่งผ่านกว่าจะถึงเครื่องนี้ · * = hop นั้นไม่ตอบ")}</div>
-        <ol style="list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px">${d.route.map((h) => `<li style="display:flex;align-items:center;gap:10px;font-size:13px"><span class="pnum" style="min-width:34px">${h.hop}</span><span class="mono" style="flex:1">${esc(h.ip || "* (ไม่ตอบ)")}</span><span class="muted">${h.rtt_ms != null ? h.rtt_ms + " ms" : ""}</span></li>`).join("")}</ol></div>` : ""}`;
+        <ol style="list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px">${d.route.map((h) => `<li style="display:flex;align-items:center;gap:10px;font-size:13px"><span class="pnum" style="min-width:34px">${h.hop}</span><span class="mono" style="flex:1">${esc(h.ip || "* (ไม่ตอบ)")}</span><span class="muted">${h.rtt_ms != null ? h.rtt_ms + " ms" : ""}</span></li>`).join("")}</ol></div>` : ""}
+      ${d.verification ? `<div style="margin-top:12px;padding:12px 14px;border-radius:14px;background:var(--soft)"><div class="lbl" style="margin-bottom:6px">${ic("check", 14)} หลักฐานการยืนยันภายใน</div>
+        <dl class="kv" style="grid-template-columns:1fr">${[["เวอร์ชันที่ตรวจได้", d.verification.measured_version], ["แพ็กเกจ/release", d.verification.package_release], ["Container", d.verification.container], ["backport แพตช์แล้ว", d.verification.backport_fixed ? "ใช่ (ยืนยันโดยผู้ดูแล)" : null], ["วิธีตรวจ", d.verification.method], ["ผู้ตรวจ", d.verification.verifier], ["ส่วนที่ไม่ครอบคลุม", d.verification.not_covered], ["หลักฐาน", d.verification.evidence], ["เมื่อ", d.verification.verified_at ? fmtDate(d.verification.verified_at) : null]].filter(([, v]) => v).map(([k, v]) => `<div><dt>${k}</dt><dd style="white-space:pre-wrap">${esc(v)}</dd></div>`).join("")}</dl></div>` : ""}`;
   }
   const panel = $("#tabpanel");
   panel.className = `tabpanel swap${R.tswap}`;
