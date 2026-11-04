@@ -16,10 +16,18 @@ diversity (Apache mod_php, nginx+FPM, LiteSpeed, FrankenPHP), framework
 fingerprints (WordPress, Laravel), real-world obstacles (CDN-stripped, Node
 decoy, static), and the key distro-backport false-positive case.
 
-Run (no Docker):
+Runs standalone on `python3` alone (no thscan, no deps):
 
 ```sh
-PYTHON=python3 ./run.sh
+python3 fixtures.py &        # serve the 23 targets
+python3 evaluate.py          # score the built-in reference detector
+# or: PYTHON=python3 ./run.sh
+```
+
+Score any other tool by feeding its `{port: status}` output:
+
+```sh
+python3 evaluate.py --results tool.json
 ```
 
 Or with Docker (reproducible, loopback-only):

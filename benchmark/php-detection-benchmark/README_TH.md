@@ -40,28 +40,36 @@ cloud-provider audit** หรือไม่ (เน้นหลักฐาน�
 
 ## วิธีรัน
 
-**แบบเร็ว (ไม่ต้องใช้ Docker)** — รันจากโฟลเดอร์นี้:
+**รันได้ด้วยตัวเอง — ใช้แค่ `python3` ไม่ต้องมี thscan หรือ dependency ใด** (คัดลอกเฉพาะโฟลเดอร์นี้ไปก็พอ)
+
+```sh
+python3 fixtures.py &      # เสิร์ฟ 23 เป้าหมายบน 127.0.0.1:9001-9023
+python3 evaluate.py        # ให้คะแนน "reference detector" ในตัว (เกณฑ์ตามเอกสาร)
+```
+
+หรือคำสั่งเดียว:
 
 ```sh
 PYTHON=python3 ./run.sh
 ```
 
-สคริปต์จะสตาร์ต fixtures บน `127.0.0.1:9001-9023` แล้วให้ thscan ตรวจและสรุปคะแนน
+### วัดเครื่องมืออื่น (เช่น thscan) ด้วย `--results`
 
-**แยกขั้นตอน**:
+ให้เครื่องมือสแกน `127.0.0.1:9001-9023` แล้วสร้างไฟล์ผลลัพธ์ `{พอร์ต: สถานะ}` แล้วป้อนเข้ามา:
 
 ```sh
-python3 fixtures.py &          # เสิร์ฟ 23 เป้าหมาย
-python3 evaluate.py            # ให้คะแนน thscan
+python3 evaluate.py --results tool.json
 ```
 
-**แบบ Docker (สำหรับเผยแพร่ ให้ reproducible)**:
+`tool.json` รับได้ทั้ง taxonomy ของเอกสาร (`possibly_affected` ฯลฯ) หรือสถานะของ thscan
+(`affected / likely / fixed / unverified / none`) — ระบบ map ให้เอง · พอร์ตที่เครื่องมือไม่รายงาน
+ถือเป็น `none` และจะถูกจับ FALSE-SAFE ถ้าควรเสี่ยง
+ตัวอย่างสร้างจาก thscan: ดึง `GET /api/scans/<id>` แล้วแมป `ip:port → php_status` ของแต่ละ device
+
+**แบบ Docker (เผยแพร่ ให้ reproducible)**:
 
 ```sh
-./pin-digests.sh               # ล็อก image เป็น digest (ทำครั้งเดียว)
-docker compose up -d
-python3 evaluate.py
-docker compose down
+./pin-digests.sh && docker compose up -d && python3 evaluate.py && docker compose down
 ```
 
 ทุกพอร์ต bind ที่ `127.0.0.1` เท่านั้น — ไม่เปิดสู่ LAN หรืออินเทอร์เน็ต

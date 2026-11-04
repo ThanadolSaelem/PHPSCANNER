@@ -1,118 +1,177 @@
-"""Score a PHP2Shell *detection* tool against the benchmark ground truth.
+"""Score a PHP2Shell *detection* result against the benchmark ground truth.
 
-Reference scorer for thscan: it probes each running fixture with thscan's own
-HTTP detection path (app.scanner.http_probe + vuln_rules), maps the result to
-the document's four-status taxonomy, and reports:
+Standalone: needs only the Python standard library (no thscan, no deps). It
+fetches each running fixture over HTTP and classifies it with a built-in
+reference detector that follows the cloud-provider audit taxonomy, then reports:
 
-  - exact-status accuracy   (strict: matches the document status)
+  - exact-status accuracy   (matches the document status)
   - risk-class accuracy      (at_risk / not_at_risk / needs_verification)
-  - FALSE-SAFE count         (the critical metric: a host that is at_risk or
-                              needs_verification but was reported not_at_risk)
+  - FALSE-SAFE count         (the critical metric: an at-risk/needs-verify host
+                              reported not_at_risk — must be 0)
   - precision / recall for the "at_risk" class
   - runtime / CMS accuracy
 
-Another tool can reuse the fixtures + cases.py labels and plug in its own
-scorer; only this file is thscan-specific.
+Modes:
+  python3 evaluate.py                 # score the built-in reference detector
+  python3 evaluate.py --results f.json# score another tool's output instead
+                                      # f.json = {"9001":"possibly_affected", ...}
+                                      # (document taxonomy, or thscan's native
+                                      #  affected/likely/fixed/unverified/none)
+
+Run fixtures.py first (or `./run.sh` to do both).
 """
-import asyncio
+import argparse
+import json
 import os
+import re
 import sys
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-sys.path.insert(0, REPO)
 sys.path.insert(0, HERE)
-
 from cases import CASES  # noqa: E402
-from app.scanner import http_probe, vuln_rules  # noqa: E402
 
 HOST = "127.0.0.1"
-
-# thscan's php_status -> the document's four-status taxonomy. thscan is stricter
-# on a bare banner (it says "affected"); the document reserves "confirmed" for
-# internal evidence, so this mapping makes the deviation visible, not hidden.
-THSCAN_TO_DOC = {
-    "affected": "confirmed_affected",
-    "likely": "possibly_affected",
-    "fixed": "evidence_of_patch",
-    "unverified": "undetermined",
-    "none": "none",
-}
+FIXED = {(8, 2): (8, 2, 35), (8, 3): (8, 3, 36), (8, 4): (8, 4, 27), (8, 5): (8, 5, 12)}
 RISK = {
     "confirmed_affected": "at_risk", "possibly_affected": "at_risk",
     "evidence_of_patch": "not_at_risk", "none": "not_at_risk",
     "undetermined": "needs_verification",
 }
+# a tool that emits thscan's native statuses is mapped into the document taxonomy
+THSCAN_TO_DOC = {
+    "affected": "confirmed_affected", "likely": "possibly_affected",
+    "fixed": "evidence_of_patch", "unverified": "undetermined", "none": "none",
+}
+
+_VER = re.compile(r"php[/ ]?v?(\d+)\.(\d+)\.(\d+)", re.I)
+_PHP_REF = re.compile(r"""(?:href|src|action)\s*=\s*['"](?!https?:|//)[^'"]*\.php(?:[?#][^'"]*)?['"]""", re.I)
+_PHP_ERR = re.compile(r"</b> on line <b>\d+</b>|Call to undefined function|<title>phpinfo", re.I)
 
 
-async def thscan_status(port):
-    async with http_probe.build_client(6.0, 2.0) as client:
-        wr = await http_probe.probe_service(client, HOST, port)
-    if wr is None:
-        return "none", None, None, None
-    ver = wr.php_version
-    pv = vuln_rules.parse_php_version(f"PHP/{ver}") if ver else None
-    seen = bool(ver) or any(f.rule_id == "php-undetermined" for f in wr.findings)
-    return vuln_rules.php2shell_status(pv, seen), ver, wr.runtime, wr.cms
+def fetch(port):
+    req = urllib.request.Request(f"http://{HOST}:{port}/", headers={"User-Agent": "benchmark/1.0"})
+    with urllib.request.urlopen(req, timeout=6) as r:
+        raw = r.read(262144)
+        enc = r.headers.get_content_charset() or "utf-8"
+        body = raw.decode(enc, "replace")
+        hdr = {k.lower(): v for k, v in r.headers.items()}
+        cookies = "; ".join(r.headers.get_all("Set-Cookie") or [])
+        if cookies:
+            hdr["set-cookie"] = cookies
+        return hdr, body
 
 
-async def main():
-    rows, exact_ok, risk_ok, false_safe = [], 0, 0, 0
-    tp = fp = fn = 0  # for the at_risk class (treating needs_verification as its own bucket)
+def detect_cms(body, hdr):
+    t, cookie = body.lower(), hdr.get("set-cookie", "").lower()
+    if "wp-content" in t or "wp-includes" in t or 'content="wordpress' in t or "wordpress_" in cookie:
+        return "WordPress"
+    if "laravel_session" in cookie or "xsrf-token" in cookie:
+        return "Laravel"
+    if 'content="joomla' in t or "/media/jui/" in t:
+        return "Joomla"
+    if "drupal.settings" in t or 'content="drupal' in t:
+        return "Drupal"
+    return None
+
+
+def reference_classify(hdr, body):
+    """The document-aligned reference detector (what a correct tool should do)."""
+    pb, server = hdr.get("x-powered-by", ""), hdr.get("server", "")
+    low = pb.lower()
+    m = _VER.search(pb) or _VER.search(server)
+    version = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+    cms = detect_cms(body, hdr)
+    node = "express" in low or "next.js" in low or re.search(r"\bnode(?:\.js)?\b", low + " " + server.lower())
+    php_sig = ("php" in low or "phpsessid" in hdr.get("set-cookie", "").lower()
+               or bool(_PHP_REF.search(body)) or bool(_PHP_ERR.search(body)) or bool(cms))
+
+    if version is not None and "php" in low:
+        branch = (version[0], version[1])
+        fix = FIXED.get(branch)
+        if fix:
+            status = "possibly_affected" if version < fix else "evidence_of_patch"
+        else:
+            status = "possibly_affected"  # EOL or a branch with no published fix row
+        runtime = "PHP %d.%d.%d" % version
+    elif php_sig and not node:
+        status, runtime = "undetermined", "PHP"
+    elif node:
+        status, runtime = "none", ("Node.js · Express" if "express" in low else "Node.js")
+    else:
+        status, runtime = "none", (server or None)
+    return status, runtime, cms
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--results", help="JSON {port: status} from a tool under test")
+    args = ap.parse_args()
+    tool = None
+    if args.results:
+        with open(args.results, encoding="utf-8") as f:
+            tool = {str(k): v for k, v in json.load(f).items()}
+
+    rows = []
+    exact_ok = risk_ok = false_safe = tp = fp = fn = 0
     rt_ok = rt_tot = cms_ok = cms_tot = 0
+    unreached = []
 
     for c in CASES:
-        lab = c["label"]
-        st, ver, runtime, cms = await thscan_status(c["port"])
-        doc = THSCAN_TO_DOC[st]
-        got_risk = RISK[doc]
-        exp_risk = lab["risk"]
-        ex = (doc == lab["status"])
-        rk = (got_risk == exp_risk)
-        exact_ok += ex
-        risk_ok += rk
-        # the one error we never tolerate: calling an at-risk/needs-verify host safe
+        lab, port = c["label"], str(c["port"])
+        try:
+            hdr, body = fetch(c["port"])
+        except Exception as e:  # noqa: BLE001
+            unreached.append((c["id"], str(e)))
+            continue
+        if tool is not None:
+            raw = tool.get(port, "none")
+            status = THSCAN_TO_DOC.get(raw, raw)
+            runtime, cms = None, None
+        else:
+            status, runtime, cms = reference_classify(hdr, body)
+        got_risk, exp_risk = RISK.get(status, "not_at_risk"), lab["risk"]
+        ex, rk = (status == lab["status"]), (got_risk == exp_risk)
         fs = exp_risk in ("at_risk", "needs_verification") and got_risk == "not_at_risk"
-        false_safe += fs
-        # precision/recall for "at_risk"
+        exact_ok += ex; risk_ok += rk; false_safe += fs
         if exp_risk == "at_risk" and got_risk == "at_risk":
             tp += 1
         elif exp_risk != "at_risk" and got_risk == "at_risk":
             fp += 1
-        elif exp_risk == "at_risk" and got_risk != "at_risk":
+        elif exp_risk == "at_risk":
             fn += 1
-        if lab["runtime"]:
-            rt_tot += 1
-            rt_ok += bool(runtime and lab["runtime"].split()[0].lower() in runtime.lower())
-        if lab["cms"]:
-            cms_tot += 1
-            cms_ok += (cms == lab["cms"])
-        rows.append((c["id"], lab["status"], doc, exp_risk, got_risk, ex, rk, fs, lab.get("note", "")))
+        if tool is None and lab["runtime"]:
+            rt_tot += 1; rt_ok += bool(runtime and lab["runtime"].split()[0].lower() in runtime.lower())
+        if tool is None and lab["cms"]:
+            cms_tot += 1; cms_ok += (cms == lab["cms"])
+        rows.append((c["id"], lab["status"], status, exp_risk, got_risk, ex, fs))
 
-    n = len(CASES)
-    w = max(len(r[0]) for r in rows)
-    print(f"\n{'case':<{w}}  {'expected':<18} {'thscan→doc':<18} risk(exp/got)   exact risk  flag")
-    print("-" * (w + 74))
-    for cid, exp, doc, er, gr, ex, rk, fs, note in rows:
+    w = max((len(r[0]) for r in rows), default=4)
+    print(f"\n{'case':<{w}}  {'expected':<18} {'got':<18} risk(exp/got)      exact flag")
+    print("-" * (w + 70))
+    for cid, exp, got, er, gr, ex, fs in rows:
         flag = "FALSE-SAFE!" if fs else ("" if ex else "status-dev")
-        print(f"{cid:<{w}}  {exp:<18} {doc:<18} {er:>7}/{gr:<7}  {'Y' if ex else '-':^5} {'Y' if rk else '-':^4}  {flag}")
+        print(f"{cid:<{w}}  {exp:<18} {got:<18} {er:>7}/{gr:<10} {'Y' if ex else '-':^5} {flag}")
 
+    n = len(rows)
     prec = tp / (tp + fp) if (tp + fp) else 1.0
     rec = tp / (tp + fn) if (tp + fn) else 1.0
     print("\n== summary ==")
-    print(f"cases                 : {n}")
-    print(f"exact-status accuracy : {exact_ok}/{n} ({100*exact_ok//n}%)")
-    print(f"risk-class accuracy   : {risk_ok}/{n} ({100*risk_ok//n}%)")
-    print(f"FALSE-SAFE            : {false_safe}   (must be 0 — a hidden/at-risk host called safe)")
+    print(f"scored                : {n}/{len(CASES)}  ({'reference detector' if tool is None else args.results})")
+    if unreached:
+        print(f"UNREACHED             : {len(unreached)}  (is fixtures.py running? {unreached[:3]})")
+    print(f"exact-status accuracy : {exact_ok}/{n} ({100*exact_ok//n if n else 0}%)")
+    print(f"risk-class accuracy   : {risk_ok}/{n} ({100*risk_ok//n if n else 0}%)")
+    print(f"FALSE-SAFE            : {false_safe}   (must be 0)")
     print(f"at_risk precision     : {prec:.2f}   recall: {rec:.2f}")
-    print(f"runtime accuracy      : {rt_ok}/{rt_tot}")
-    print(f"CMS accuracy          : {cms_ok}/{cms_tot}")
-    print("\nnote: 'status-dev' = thscan reports a bare banner as confirmed-affected while the")
-    print("document reserves that for internal evidence (expects possibly_affected). Same risk")
-    print("bucket, stricter wording. FALSE-SAFE is the only failure that matters for safety.")
-    # fail the run only on a genuine safety error
-    return 1 if false_safe else 0
+    if tool is None:
+        print(f"runtime accuracy      : {rt_ok}/{rt_tot}")
+        print(f"CMS accuracy          : {cms_ok}/{cms_tot}")
+    print("\n'status-dev' = right risk bucket, different exact wording (e.g. a tool that calls a")
+    print("bare banner 'confirmed' where the document expects 'possibly'). FALSE-SAFE is the")
+    print("only failure that matters for safety.")
+    return 1 if (false_safe or unreached) else 0
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(main())
