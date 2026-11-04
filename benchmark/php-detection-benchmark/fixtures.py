@@ -6,6 +6,7 @@ sends no payload anywhere. Bound to loopback only.
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from cases import CASES
@@ -13,13 +14,24 @@ from cases import CASES
 # loopback by default; a container sets FIXTURE_BIND=0.0.0.0 and the host maps
 # the ports to 127.0.0.1 only (see docker-compose.yml)
 HOST = os.environ.get("FIXTURE_BIND", "127.0.0.1")
+# FIXTURE_LOG=1 prints every incoming request, so you can watch a scan reach
+# each target in real time. Off by default to keep the scorer's output clean.
+LOG = os.environ.get("FIXTURE_LOG", "") not in ("", "0", "false", "no")
+PORT_CASE = {c["port"]: c for c in CASES}
 
 
-def make_handler(resp):
+def make_handler(resp, port):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def _send(self):
+            if LOG:
+                c = PORT_CASE.get(port, {})
+                title = c.get("title", "")
+                exp = c.get("label", {}).get("status", "")
+                ts = time.strftime("%H:%M:%S")
+                print(f"{ts}  :{port:<5} {self.command:4} {self.path:<14} <- {self.client_address[0]}"
+                      f"  [{c.get('id','')}: {title} · ground-truth={exp}]", flush=True)
             body = resp["body"].encode("utf-8")
             self.send_response(resp["status"])
             sent_type = False
@@ -48,7 +60,7 @@ def make_handler(resp):
 def main():
     servers = []
     for c in CASES:
-        srv = ThreadingHTTPServer((HOST, c["port"]), make_handler(c["response"]))
+        srv = ThreadingHTTPServer((HOST, c["port"]), make_handler(c["response"], c["port"]))
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
         servers.append(srv)

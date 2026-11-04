@@ -14,6 +14,8 @@ services:
     command: ["python", "fixtures.py"]
     environment:
       FIXTURE_BIND: "0.0.0.0"
+      # set to "1" to print each incoming request (watch a scan arrive):
+      FIXTURE_LOG: "0"
     volumes:
       - ./cases.py:/lab/cases.py:ro
       - ./fixtures.py:/lab/fixtures.py:ro
