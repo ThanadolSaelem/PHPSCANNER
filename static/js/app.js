@@ -598,8 +598,7 @@ async function viewScan(_, alive) {
       renderTargetPanel(); renderAdvPanel(); updateScan();
     }
     const status = $("#csv-import-status");
-    if (!cfg.enforce_scope) {
-      if (status) status.textContent = "ปฏิเสธการนำเข้า: ต้องเปิด THSCAN_ENFORCE_SCOPE=1 และกำหนด allowlist ก่อน";
+    if (cfg.enforce_scope) {
       input.value = "";
       return;
     }
@@ -616,9 +615,6 @@ async function viewScan(_, alive) {
       if (token !== S.csvImportToken) return;
       const scope = checkTargets(parsed.targets);
       if (scope.error) throw new Error(scope.error);
-      if (scope.outsideCount) {
-        throw new Error(`พบ ${num(scope.outsideCount)} IP อยู่นอก THSCAN_ALLOWED_CIDRS — ยกเลิกทั้งไฟล์ (ตัวอย่าง: ${scope.outside.join(", ")})`);
-      }
       S.csvTargets = parsed.targets;
       S.text = "";
       S.mode = "text";
