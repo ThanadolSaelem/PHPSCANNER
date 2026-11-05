@@ -232,13 +232,16 @@ function specBounds(spec) {
 let allowedNets = [];
 const inScope = (a, b) => !(cfg && cfg.enforce_scope) || allowedNets.some((n) => n.net <= a && b <= n.bcast);
 function checkTargets(specs) {
-  const out = { count: 0, error: null, outside: [] };
+  const out = { count: 0, error: null, outside: [], outsideCount: 0 };
   if (!specs.length) { out.error = "ยังไม่ได้ระบุเป้าหมาย"; return out; }
   for (const s of specs) {
     let a, b;
     try { [a, b] = specBounds(s); } catch (e) { out.error = e.message; return out; }
     out.count += b - a + 1;
-    if (!inScope(a, b)) out.outside.push(s);
+    if (!inScope(a, b)) {
+      out.outsideCount += 1;
+      if (out.outside.length < 5) out.outside.push(s);
+    }
   }
   return out;
 }
@@ -411,7 +414,8 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
+  site: "", text: "", csvTargets: null, csvImportToken: 0, profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
+const MAX_CSV_FILE_BYTES = 20 * 1024 * 1024;
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
   ["single", "เครื่องเดียว", "ตรวจซ้ำหลังแก้ไข", "cube"], ["site", "เว็บไซต์", "วางลิงก์หรือชื่อโดเมน", "globe"],
@@ -459,8 +463,13 @@ function scanPlan() {
     plan.valid = okOct(S.single); specs = plan.valid ? [ip(S.single)] : [];
     plan.label = "เครื่องเดียว"; plan.big = S.single.join("."); plan.sub = "ตรวจละเอียดเฉพาะเครื่องนี้"; plan.summary = `เครื่องเดียว · ${S.single.join(".")}`;
   } else {
-    specs = S.text.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean).slice(0, 64);
-    plan.label = "พิมพ์เอง"; plan.big = `${specs.length} รายการ`; plan.summary = `พิมพ์เอง · ${specs.length} รายการ`;
+    if (S.csvTargets) {
+      specs = S.csvTargets;
+      plan.label = "IP จาก CSV"; plan.big = `${num(specs.length)} IP`; plan.summary = `CSV · ${num(specs.length)} IP`;
+    } else {
+      specs = S.text.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean).slice(0, 64);
+      plan.label = "พิมพ์เอง"; plan.big = `${specs.length} รายการ`; plan.summary = `พิมพ์เอง · ${specs.length} รายการ`;
+    }
   }
   const c = checkTargets(specs);
   if (c.error) { plan.valid = false; plan.reason = c.error; if (S.mode === "text") plan.sub = c.error; }
@@ -545,11 +554,17 @@ async function viewScan(_, alive) {
   pt.addEventListener("click", (e) => {
     const m = e.target.closest("[data-mode]"), d = e.target.closest("[data-detected]");
     if (m && m.dataset.mode !== S.mode) {
+      if (S.csvTargets) { S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1; renderAdvPanel(); }
       S.mode = m.dataset.mode; if (S.mode === "site") S.lanFingerprint = false; S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true);
       if (S.mode === "site") resolveSites();
       const first = $("input", pt); first && first.focus({ preventScroll: true });
     }
-    if (d) { const b = cidrBounds(d.dataset.detected); if (b) { S.mode = "subnet"; S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(16, b.prefix)); S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true); shut($("#d-target")); } }
+    if (e.target.closest("[data-clear-csv]")) {
+      S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1;
+      renderTargetPanel(); renderAdvPanel(); updateScan();
+      return;
+    }
+    if (d) { const b = cidrBounds(d.dataset.detected); if (b) { S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1; S.mode = "subnet"; S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(16, b.prefix)); S.swap = 1 - S.swap; renderTargetPanel(); renderAdvPanel(); updateScan(true); shut($("#d-target")); } }
     const u = e.target.closest("[data-use-ip]");
     if (u) useIpTarget(u.dataset.ip, u.dataset.port ? +u.dataset.port : null);
   });
@@ -561,9 +576,66 @@ async function viewScan(_, alive) {
       if (v.length === 3 && +t.dataset.i < 3) focusOct(t, 1);
     } else if (t.id === "rs" || t.id === "re") { t.value = t.value.replace(/\D/g, "").slice(0, 3); S[t.id] = t.value; t.setAttribute("aria-invalid", String(t.value !== "" && +t.value > 255)); }
     else if (t.id === "site-in") { S.site = t.value; resolveSites(); }
-    else if (t.id === "text-in") S.text = t.value;
+    else if (t.id === "text-in") {
+      if (S.csvTargets) { S.csvTargets = null; S.rceVerify = false; S.lanFingerprint = false; renderAdvPanel(); }
+      S.text = t.value;
+    }
     else return;
     updateScan();
+  });
+  pt.addEventListener("change", async (e) => {
+    const input = e.target;
+    if (input.id !== "ip-csv" || !input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const token = ++S.csvImportToken;
+    if (S.csvTargets) {
+      S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false;
+      renderTargetPanel(); renderAdvPanel(); updateScan();
+    }
+    const status = $("#csv-import-status");
+    if (!cfg.enforce_scope) {
+      if (status) status.textContent = "ปฏิเสธการนำเข้า: ต้องเปิด THSCAN_ENFORCE_SCOPE=1 และกำหนด allowlist ก่อน";
+      input.value = "";
+      return;
+    }
+    if (file.size > MAX_CSV_FILE_BYTES) {
+      if (status) status.textContent = "ไฟล์ใหญ่เกิน 20 MB — แบ่งไฟล์หรือส่งออกเฉพาะคอลัมน์ IP ก่อน";
+      input.value = "";
+      return;
+    }
+    if (status) status.textContent = "กำลังอ่านและตรวจไฟล์ในเบราว์เซอร์…";
+    try {
+      const parsed = ThscanCsvImport.parseCsvIpTargets(await file.text());
+      if (token !== S.csvImportToken) return;
+      const scope = checkTargets(parsed.targets);
+      if (scope.error) throw new Error(scope.error);
+      if (scope.outsideCount) {
+        throw new Error(`พบ ${num(scope.outsideCount)} IP อยู่นอก THSCAN_ALLOWED_CIDRS — ยกเลิกทั้งไฟล์ (ตัวอย่าง: ${scope.outside.join(", ")})`);
+      }
+      S.csvTargets = parsed.targets;
+      S.text = "";
+      S.mode = "text";
+      S.rceVerify = false;
+      S.lanFingerprint = false;
+      S.swap = 1 - S.swap;
+      renderTargetPanel();
+      renderAdvPanel();
+      updateScan(true);
+      const tooMany = parsed.targets.length > cfg.max_targets
+        ? ` เกินเพดาน ${num(cfg.max_targets)} IP จึงยังเริ่มสแกนไม่ได้`
+        : "";
+      const statusAfter = $("#csv-import-status");
+      if (statusAfter) statusAfter.textContent = `นำเข้า ${num(parsed.targets.length)} IP ไม่ซ้ำ · ตัดรายการซ้ำ ${num(parsed.duplicates)}${tooMany}`;
+      toast(`นำเข้า CSV แล้ว ${num(parsed.targets.length)} IP — ตรวจ scope และเพดานงานเรียบร้อย`);
+    } catch (err) {
+      if (token === S.csvImportToken) {
+        const statusAfter = $("#csv-import-status");
+        if (statusAfter) statusAfter.textContent = err.message;
+        toast(err.message);
+      }
+    } finally {
+      input.value = "";
+    }
   });
   pt.addEventListener("keydown", (e) => {
     const t = e.target;
@@ -648,6 +720,7 @@ function parseIpTarget(text) {
 // Switch the scan form to "single machine" for this IP, and if a non-standard
 // port was given, add it to a custom port set so the host is actually probed.
 function useIpTarget(ip, port) {
+  S.csvTargets = null; S.text = ""; S.csvImportToken += 1;
   S.mode = "single"; S.single = ip.split(".");
   const web = cfg.web_ports || [];
   if (port) { S.profile = "custom"; S.custom = String(port); }
@@ -701,6 +774,14 @@ function renderTargetPanel() {
   else if (S.mode === "site") input = `<label style="display:block"><span class="lbl">ลิงก์หรือชื่อโดเมนเว็บไซต์ ${tip("วางลิงก์หรือชื่อโดเมน เช่น https://example.com ระบบจะค้นหา IP จาก DNS ให้ และส่งชื่อโดเมนไปด้วยเพื่อให้ได้ผลของเว็บนั้นจริง · ใส่ได้หลายเว็บคั่นด้วยเว้นวรรคหรือจุลภาค")}</span>
     <input class="inp" id="site-in" value="${esc(S.site)}" placeholder="https://example.com" autocomplete="off" spellcheck="false"></label><div id="site-preview" aria-live="polite" style="margin-top:8px"></div>`;
   else input = `<label style="display:block"><span class="lbl">ซับเน็ต ช่วง หรือ IP คั่นด้วยจุลภาค</span><input class="inp" id="text-in" value="${esc(S.text)}" placeholder="10.0.5.0/24, 10.0.6.10-50, 10.0.7.3" autocomplete="off" spellcheck="false"></label>`;
+  const csvImport = `<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--soft)">
+    <label class="lbl" for="ip-csv">นำเข้า IP จากไฟล์ CSV</label>
+    <input class="inp" id="ip-csv" type="file" accept=".csv,text/csv" ${cfg.enforce_scope ? "" : "disabled"} aria-describedby="csv-import-help">
+    <p class="od" id="csv-import-help" style="margin-top:6px">อ่านไฟล์ในเบราว์เซอร์และไม่บันทึกไฟล์บนเซิร์ฟเวอร์ · ใช้คอลัมน์ <span class="mono">IP</span> หรือ <span class="mono">IP Address</span>; ถ้าไม่มีหัวตารางจะใช้คอลัมน์แรก · IPv4 เท่านั้น · ไม่เกิน 20 MB</p>
+    ${cfg.enforce_scope ? `<p class="od" style="margin-top:4px">รับเฉพาะ IP ที่อยู่ใน allowlist <span class="mono">THSCAN_ALLOWED_CIDRS</span> และยังติดเพดานจำนวนเป้าหมาย/พอร์ตที่ deploy ไว้</p>` : `<p class="od" style="margin-top:4px;color:var(--warn)">ต้องเปิด <span class="mono">THSCAN_ENFORCE_SCOPE=1</span> และกำหนด <span class="mono">THSCAN_ALLOWED_CIDRS</span> ก่อนนำเข้า CSV</p>`}
+    <div id="csv-import-status" role="status" aria-live="polite" style="margin-top:8px;font-size:13px">${S.csvTargets ? `นำเข้าแล้ว ${num(S.csvTargets.length)} IP ไม่ซ้ำ` : ""}</div>
+    ${S.csvTargets ? `<button type="button" class="btn" data-clear-csv style="margin-top:6px">ล้างรายการที่นำเข้า</button>` : ""}
+  </div>`;
   const det = S.detected.length && S.mode !== "site" ? `<div style="margin-top:12px"><span class="lbl">ระบบหาให้แล้ว ${tip("วงเครือข่ายที่เครื่องนี้เชื่อมต่ออยู่ กดเพื่อใช้ได้ทันที")}</span>
     <div style="display:flex;flex-direction:column;gap:6px">${S.detected.map((d) => `<button type="button" class="opt" data-detected="${esc(d.cidr)}" ${d.ok ? "" : "disabled"} style="min-height:46px"><span style="flex:1;min-width:0"><span class="ot">${esc(d.cidr)}</span><span class="od">${esc(d.name)}</span></span><span class="badge ${d.ok ? "b-blue" : "b-grey"}">${d.ok ? `ใช้วงนี้ · ${num(d.hosts)}` : "นอกขอบเขต"}</span></button>`).join("")}</div></div>` : "";
   $("#p-target").innerHTML = `<div class="stag">
@@ -708,7 +789,7 @@ function renderTargetPanel() {
     <div role="group" aria-label="ประเภทเป้าหมาย" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
       ${MODES.map(([k, t, d, i]) => `<button type="button" class="opt" data-mode="${k}" aria-pressed="${S.mode === k}"><span class="oi">${ic(i)}</span><span style="min-width:0"><span class="ot">${t}</span><span class="od">${d}</span></span></button>`).join("")}
     </div>
-    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">${input}</div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #EDF0F8">${input}${csvImport}</div>
     ${det}</div>`;
   renderSitePreview();
 }
