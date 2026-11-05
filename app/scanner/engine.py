@@ -442,6 +442,11 @@ class ScanEngine:
                             ip=ip, hostname=wr.hostname or site_host or ip,
                             port=wr.probe_port or port,
                             scheme=wr.probe_scheme or wr.scheme,
+                            http_title=wr.http_title,
+                            server=wr.server,
+                            powered_by=wr.powered_by,
+                            technologies=wr.technologies,
+                            banner_snippet=wr.banner_snippet or None,
                         )
                         web_endpoints.append(web_endpoint)
                         if on_web_endpoint is not None:

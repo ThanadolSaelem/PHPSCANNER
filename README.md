@@ -45,6 +45,8 @@ thscan เป็นเว็บแอปที่มีเซิร์ฟเว�
 
 ผลจาก “ดูตัวอย่างผล” ใช้ข้อมูลจำลองจากเซิร์ฟเวอร์ และมีป้าย **ตัวอย่าง · ข้อมูลจำลอง** กำกับทุกหน้า (ผล, ประวัติ, รายงาน)
 
+CSV ผลสแกนเขียนหนึ่งแถวต่อหนึ่งพอร์ตที่พบ โดยมีคอลัมน์ตาม schema สำหรับนำไปประมวลผลต่อ เช่น IP, port, transport, HTTP title/server, `X-Powered-By`, technologies ที่ตรวจพบ และ banner snippet แบบจำกัด header ที่ปลอดภัย ระบบยังไม่ทำ cloud ownership, ASN/ISP, GeoIP, registrable domain หรือ OS enrichment จึงเว้นช่องเหล่านั้นไว้และระบุ Confidence Level เป็น `Not assessed` แทนการเดาจาก IP หรือ banner; `Device Category` เป็นบทบาทบริการที่สังเกตได้ ไม่ใช่การยืนยัน hardware หรือ cloud VM
+
 ### ตรวจเว็บไซต์จากลิงก์
 
 วาง `https://www.agency.go.th` หรือ `eservice.agency.go.th` (บรรทัดละเว็บ สูงสุด 20) แล้วระบบจะ:

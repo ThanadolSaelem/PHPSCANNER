@@ -100,6 +100,11 @@ class WebEndpoint(CompatBaseModel):
     hostname: Optional[str] = None
     port: int
     scheme: str
+    http_title: Optional[str] = None
+    server: Optional[str] = None
+    powered_by: Optional[str] = None
+    technologies: List[str] = Field(default_factory=list)
+    banner_snippet: Optional[str] = None
 
 
 class ServicePort(CompatBaseModel):

@@ -1052,7 +1052,7 @@ function renderResults() {
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${demo ? `<a class="btn" href="#/">สแกนเครือข่ายจริง</a>` : `<button type="button" class="btn" id="rescan">${ic("refresh", 17)}สแกนอีกครั้ง</button>`}
       ${dock("d-export", `<button type="button" class="btn btn-g">${ic("download", 17)}ส่งออก${chev.replace('class="chev"', 'class="chev" style="color:#fff;margin-left:0"')}</button>`, `<div class="stag" role="menu">
-        <a class="mi" role="menuitem" href="/api/scans/${esc(j.id)}/export.csv"><span><span style="display:block">CSV ทั้งชุด</span><span class="od">เปิดใน Excel ได้ · ทุกเครื่อง ทุกคอลัมน์</span></span></a>
+        <a class="mi" role="menuitem" href="/api/scans/${esc(j.id)}/export.csv"><span><span style="display:block">CSV ทั้งชุด</span><span class="od">หนึ่งแถวต่อพอร์ต · cloud/GeoIP ไม่ได้ enrich</span></span></a>
         ${j.devices.length ? `<button type="button" class="mi" role="menuitem" id="csv-view"><span><span style="display:block">CSV เฉพาะที่แสดงอยู่</span><span class="od" id="csv-n"></span></span></button>` : ""}
         <a class="mi" role="menuitem" href="#/report/${esc(j.id)}"><span><span style="display:block">รายงานผู้บริหาร</span><span class="od">พิมพ์หรือบันทึก PDF</span></span></a>
         <a class="mi" role="menuitem" href="/api/scans/${esc(j.id)}/export.json"><span><span style="display:block">JSON</span><span class="od">เชื่อมกับระบบอื่น</span></span></a></div>`, { w: 280, align: "end" })}
@@ -1401,10 +1401,22 @@ function paintTabs() {
 }
 function downloadCsv(devices, name) {
   const cell = (v) => { let s = String(v ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replace(/"/g, '""')}"`; };
-  const head = ["ip", "hostname", "mac", "device_type", "device_type_confidence", "device_type_source", "device_type_evidence", "lan_fingerprint_status", "service", "php_version", "cms", "open_ports", "open_services", "latency_ms", "severity", "assessment", "cve"];
-  const rows = devices.map((d) => [d.ip, d.hostname, d.mac, d.device_type, d.device_type_confidence, d.device_type_source,
-    (d.device_type_evidence || []).join(" | "), d.lan_fingerprint_status, d.service, d.php_version, d.cms, d.open_ports.join(" "),
-    services(d).map((x) => `${x.port}/${x.name}`).join(" "), d.latency_ms, d.severity, d.assessment, [...new Set(d.findings.flatMap((f) => f.cve))].sort().join(" ")]);
+  const head = ["IP Address", "Port", "Transport", "IaaS Cloud Provider", "Cloud Type", "Confidence Level", "Device Category", "Cloud ASN", "Datacenter Location", "Cloud Products", "Organization", "ISP", "ASN", "Hostnames", "Domains", "Country", "City", "HTTP Title", "HTTP Server", "X-Powered-By", "Technologies", "OS", "Timestamp", "Banner Snippet"];
+  const scannedAt = R.job.finished_at || R.job.created_at || "";
+  const rows = devices.flatMap((d) => {
+    const endpoints = new Map((d.web_endpoints || []).map((e) => [e.port, e]));
+    const servicesByPort = new Map(services(d).map((s) => [Number(s.port), s]));
+    const ports = [...servicesByPort.keys()].filter(Number.isFinite).sort((a, b) => a - b);
+    return ports.map((port) => {
+      const e = endpoints.get(port) || {};
+      const service = servicesByPort.get(port) || {};
+      const hostname = e.hostname && e.hostname !== d.ip ? e.hostname : (d.hostname && d.hostname !== d.ip ? d.hostname : "");
+      const technologies = e.technologies || [];
+      return [d.ip, port, "tcp", "", "", "Not assessed (no cloud attribution source)", d.device_type || "", "", "", "", "", "", "",
+        hostname, "", "", "", e.http_title || "", e.server || "", e.powered_by || "",
+        [...new Set(technologies)].join("; "), "", scannedAt, e.banner_snippet || service.product || ""];
+    });
+  });
   const csv = "﻿" + [head, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));

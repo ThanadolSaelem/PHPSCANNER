@@ -386,6 +386,59 @@ def _csv_cell(value: object) -> str:
     return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
+CSV_EXPORT_COLUMNS = [
+    "IP Address", "Port", "Transport", "IaaS Cloud Provider", "Cloud Type",
+    "Confidence Level", "Device Category", "Cloud ASN", "Datacenter Location",
+    "Cloud Products", "Organization", "ISP", "ASN", "Hostnames", "Domains",
+    "Country", "City", "HTTP Title", "HTTP Server", "X-Powered-By",
+    "Technologies", "OS", "Timestamp", "Banner Snippet",
+]
+
+
+def _scan_csv_rows(job) -> list[list[object]]:
+    """Build truthful per-port rows; cloud ownership and GeoIP require a separate source."""
+    scan_time = (job.finished_at or job.created_at).isoformat()
+    rows: list[list[object]] = []
+    for device in job.devices:
+        endpoints = {endpoint.port: endpoint for endpoint in device.web_endpoints}
+        services = {service.port: service for service in device.services}
+        ports_seen = sorted(set(services) | set(device.open_ports))
+        for port in ports_seen:
+            endpoint = endpoints.get(port)
+            service = services.get(port)
+            hostname = (endpoint.hostname if endpoint else None) or device.hostname or ""
+            if hostname == device.ip:
+                hostname = ""
+            rows.append([
+                device.ip,
+                port,
+                "tcp",
+                "",  # No provider ownership source is configured in thscan.
+                "",
+                "Not assessed (no cloud attribution source)",
+                device.device_type or "",
+                "",  # Cloud ASN is not inferred from an IP range alone.
+                "",
+                "",
+                "",
+                "",
+                "",
+                hostname,
+                "",  # A reverse-DNS name is not enough to infer a registrable domain.
+                "",
+                "",
+                endpoint.http_title if endpoint else "",
+                endpoint.server if endpoint else "",
+                endpoint.powered_by if endpoint else "",
+                "; ".join(endpoint.technologies) if endpoint else "",
+                "",  # No OS fingerprinting is performed by the current scan modes.
+                scan_time,
+                (endpoint.banner_snippet if endpoint and endpoint.banner_snippet
+                 else (service.product or "" if service else "")),
+            ])
+    return rows
+
+
 @app.get("/api/scans/{job_id}/export.csv")
 async def export_csv(job_id: str) -> Response:
     job = store.get(job_id)
@@ -394,52 +447,9 @@ async def export_csv(job_id: str) -> Response:
     buf = io.StringIO()
     buf.write("\ufeff")
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "ip",
-            "hostname",
-            "mac",
-            "device_type",
-            "device_type_confidence",
-            "device_type_source",
-            "device_type_evidence",
-            "lan_fingerprint_status",
-            "service",
-            "runtime",
-            "php_version",
-            "cms",
-            "open_ports",
-            "open_services",
-            "latency_ms",
-            "severity",
-            "assessment",
-            "cve",
-        ]
-    )
-    for d in job.devices:
-        cves = " ".join(sorted({c for f in d.findings for c in f.cve}))
-        writer.writerow(_csv_cell(v) for v in
-            [
-                d.ip,
-                d.hostname or "",
-                d.mac or "",
-                d.device_type,
-                d.device_type_confidence.value,
-                d.device_type_source,
-                " | ".join(d.device_type_evidence),
-                d.lan_fingerprint_status,
-                d.service,
-                d.runtime or "",
-                d.php_version or "",
-                d.cms or "",
-                " ".join(str(p) for p in d.open_ports),
-                " ".join(f"{x.port}/{x.name}" for x in d.services),
-                d.latency_ms if d.latency_ms is not None else "",
-                d.severity.value,
-                d.assessment,
-                cves,
-            ]
-        )
+    writer.writerow(CSV_EXPORT_COLUMNS)
+    for row in _scan_csv_rows(job):
+        writer.writerow(_csv_cell(value) for value in row)
     store.audit.record("export_csv", job_id=job_id)
     return Response(
         content=buf.getvalue(),
