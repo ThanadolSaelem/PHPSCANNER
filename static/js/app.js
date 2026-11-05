@@ -230,7 +230,7 @@ function specBounds(spec) {
   return [n, n];
 }
 let allowedNets = [];
-const inScope = (a, b) => !(cfg && cfg.enforce_scope) || allowedNets.some((n) => n.net <= a && b <= n.bcast);
+const inScope = () => true
 function checkTargets(specs) {
   const out = { count: 0, error: null, outside: [], outsideCount: 0 };
   if (!specs.length) { out.error = "ยังไม่ได้ระบุเป้าหมาย"; return out; }
@@ -783,9 +783,8 @@ function renderTargetPanel() {
   else input = `<label style="display:block"><span class="lbl">ซับเน็ต ช่วง หรือ IP คั่นด้วยจุลภาค</span><input class="inp" id="text-in" value="${esc(S.text)}" placeholder="10.0.5.0/24, 10.0.6.10-50, 10.0.7.3" autocomplete="off" spellcheck="false"></label>`;
   const csvImport = `<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--soft)">
     <label class="lbl" for="ip-csv">นำเข้า IP จากไฟล์ CSV</label>
-    <input class="inp" id="ip-csv" type="file" accept=".csv,text/csv" ${cfg.enforce_scope ? "" : "disabled"} aria-describedby="csv-import-help">
+    <input class="inp" id="ip-csv" type="file" accept=".csv,text/csv" aria-describedby="csv-import-help">
     <p class="od" id="csv-import-help" style="margin-top:6px">อ่านไฟล์ในเบราว์เซอร์และไม่บันทึกไฟล์บนเซิร์ฟเวอร์ · ใช้คอลัมน์ <span class="mono">IP</span> หรือ <span class="mono">IP Address</span>; ถ้าไม่มีหัวตารางจะใช้คอลัมน์แรก · IPv4 เท่านั้น · ไม่เกิน 20 MB</p>
-    ${cfg.enforce_scope ? `<p class="od" style="margin-top:4px">รับเฉพาะ IP ที่อยู่ใน allowlist <span class="mono">THSCAN_ALLOWED_CIDRS</span> และยังติดเพดานจำนวนเป้าหมาย/พอร์ตที่ deploy ไว้</p>` : `<p class="od" style="margin-top:4px;color:var(--warn)">ต้องเปิด <span class="mono">THSCAN_ENFORCE_SCOPE=1</span> และกำหนด <span class="mono">THSCAN_ALLOWED_CIDRS</span> ก่อนนำเข้า CSV</p>`}
     <div id="csv-import-status" role="status" aria-live="polite" style="margin-top:8px;font-size:13px">${S.csvTargets ? `นำเข้าแล้ว ${num(S.csvTargets.length)} IP ไม่ซ้ำ` : ""}</div>
     ${S.csvTargets ? `<button type="button" class="btn" data-clear-csv style="margin-top:6px">ล้างรายการที่นำเข้า</button>` : ""}
   </div>`;
