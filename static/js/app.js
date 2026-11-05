@@ -414,7 +414,7 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", csvTargets: null, csvImportToken: 0, profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
+  site: "", text: "", csvTargets: null, csvImportToken: 0, csvImportPending: false, profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
 const MAX_CSV_FILE_BYTES = 20 * 1024 * 1024;
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
@@ -481,10 +481,12 @@ function scanPlan() {
   if (!plan.valid && !plan.reason) plan.reason = "กรอกเป้าหมายให้ครบ (0–255)";
   if (plan.valid && plan.count > cfg.max_targets) { plan.scoped = false; plan.reason = `เกินจำนวนสูงสุด ${num(cfg.max_targets)} ที่อยู่ต่อครั้ง`; }
   plan.body = { targets: specs };
+  if (S.csvImportPending) { plan.pending = true; plan.reason = "กำลังอ่านและตรวจไฟล์ CSV…"; }
   return plan;
 }
 
 async function viewScan(_, alive) {
+  onCleanup(() => { S.csvImportToken += 1; S.csvImportPending = false; });
   const auto = await api("/api/autodetect").catch(() => ({ subnets: [] }));
   if (!alive()) return;
   S.detected = detect(auto.subnets);
@@ -554,17 +556,18 @@ async function viewScan(_, alive) {
   pt.addEventListener("click", (e) => {
     const m = e.target.closest("[data-mode]"), d = e.target.closest("[data-detected]");
     if (m && m.dataset.mode !== S.mode) {
-      if (S.csvTargets) { S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1; renderAdvPanel(); }
+      S.csvImportToken += 1; S.csvImportPending = false;
+      if (S.csvTargets) { S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; renderAdvPanel(); }
       S.mode = m.dataset.mode; if (S.mode === "site") S.lanFingerprint = false; S.swap = 1 - S.swap; renderTargetPanel(); updateScan(true);
       if (S.mode === "site") resolveSites();
       const first = $("input", pt); first && first.focus({ preventScroll: true });
     }
     if (e.target.closest("[data-clear-csv]")) {
-      S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1;
+      S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1; S.csvImportPending = false;
       renderTargetPanel(); renderAdvPanel(); updateScan();
       return;
     }
-    if (d) { const b = cidrBounds(d.dataset.detected); if (b) { S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1; S.mode = "subnet"; S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(16, b.prefix)); S.swap = 1 - S.swap; renderTargetPanel(); renderAdvPanel(); updateScan(true); shut($("#d-target")); } }
+    if (d) { const b = cidrBounds(d.dataset.detected); if (b) { S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false; S.csvImportToken += 1; S.csvImportPending = false; S.mode = "subnet"; S.oct = intToIp(b.net).split("."); S.prefix = Math.min(30, Math.max(16, b.prefix)); S.swap = 1 - S.swap; renderTargetPanel(); renderAdvPanel(); updateScan(true); shut($("#d-target")); } }
     const u = e.target.closest("[data-use-ip]");
     if (u) useIpTarget(u.dataset.ip, u.dataset.port ? +u.dataset.port : null);
   });
@@ -577,6 +580,7 @@ async function viewScan(_, alive) {
     } else if (t.id === "rs" || t.id === "re") { t.value = t.value.replace(/\D/g, "").slice(0, 3); S[t.id] = t.value; t.setAttribute("aria-invalid", String(t.value !== "" && +t.value > 255)); }
     else if (t.id === "site-in") { S.site = t.value; resolveSites(); }
     else if (t.id === "text-in") {
+      S.csvImportToken += 1; S.csvImportPending = false;
       if (S.csvTargets) { S.csvTargets = null; S.rceVerify = false; S.lanFingerprint = false; renderAdvPanel(); }
       S.text = t.value;
     }
@@ -588,6 +592,7 @@ async function viewScan(_, alive) {
     if (input.id !== "ip-csv" || !input.files || !input.files[0]) return;
     const file = input.files[0];
     const token = ++S.csvImportToken;
+    S.csvImportPending = false;
     if (S.csvTargets) {
       S.csvTargets = null; S.text = ""; S.rceVerify = false; S.lanFingerprint = false;
       renderTargetPanel(); renderAdvPanel(); updateScan();
@@ -603,6 +608,8 @@ async function viewScan(_, alive) {
       input.value = "";
       return;
     }
+    S.csvImportPending = true;
+    updateScan();
     if (status) status.textContent = "กำลังอ่านและตรวจไฟล์ในเบราว์เซอร์…";
     try {
       const parsed = ThscanCsvImport.parseCsvIpTargets(await file.text());
@@ -615,6 +622,7 @@ async function viewScan(_, alive) {
       S.csvTargets = parsed.targets;
       S.text = "";
       S.mode = "text";
+      S.csvImportPending = false;
       S.rceVerify = false;
       S.lanFingerprint = false;
       S.swap = 1 - S.swap;
@@ -629,11 +637,14 @@ async function viewScan(_, alive) {
       toast(`นำเข้า CSV แล้ว ${num(parsed.targets.length)} IP — ตรวจ scope และเพดานงานเรียบร้อย`);
     } catch (err) {
       if (token === S.csvImportToken) {
+        S.csvImportPending = false;
         const statusAfter = $("#csv-import-status");
         if (statusAfter) statusAfter.textContent = err.message;
+        updateScan();
         toast(err.message);
       }
     } finally {
+      if (token === S.csvImportToken) { S.csvImportPending = false; updateScan(); }
       input.value = "";
     }
   });
@@ -720,7 +731,7 @@ function parseIpTarget(text) {
 // Switch the scan form to "single machine" for this IP, and if a non-standard
 // port was given, add it to a custom port set so the host is actually probed.
 function useIpTarget(ip, port) {
-  S.csvTargets = null; S.text = ""; S.csvImportToken += 1;
+  S.csvTargets = null; S.text = ""; S.csvImportToken += 1; S.csvImportPending = false;
   S.mode = "single"; S.single = ip.split(".");
   const web = cfg.web_ports || [];
   if (port) { S.profile = "custom"; S.custom = String(port); }
@@ -919,7 +930,7 @@ function updateScan(modeChanged) {
   $("#ready-v").textContent = ok ? `${num(plan.count)} ที่อยู่ · ${time}` : reason;
   const line = (good, text) => `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge ${good ? "b-ok" : "b-bad"}" style="padding:4px 7px">${ic(good ? "check" : "x", 13, 3)}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(text)}</span></div>`;
   $("#p-ready").innerHTML = `<div class="stag">
-    ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? "กำลังตรวจลิงก์…" : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
+    ${line(plan.valid && !plan.pending, plan.valid ? (plan.pending ? (plan.reason || "กำลังตรวจสอบ…") : `เป้าหมาย: ${plan.summary}`) : plan.reason)}
     ${line(plan.scoped && !plan.pending, site ? (plan.scoped ? (cfg.enforce_scope ? "เป็นโดเมนหน่วยงาน" : "โหมดเปิด · สแกนได้ทุกเว็บไซต์") : plan.reason || "ไม่ใช่โดเมนหน่วยงาน") : (plan.scoped ? (cfg.enforce_scope ? "อยู่ในขอบเขตที่ผู้ดูแลอนุญาต" : "โหมดเปิด · สแกนได้ทุกเป้าหมาย") : plan.reason || "อยู่นอกขอบเขต"))}
     ${line(!pc.error && budgetOk, pc.error ? pc.error : budgetOk ? `ตรวจ ${num(pc.n)} พอร์ตต่อเครื่อง` : reason)}
     <div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px"><span class="badge b-blue" style="padding:4px 7px">${ic("clock", 13, 2.6)}</span>ใช้เวลา${ok ? time : "—"} · ${S.mode2 === "fast" && S.rceVerify ? "กรอกแบบฟอร์มก่อนเริ่ม แล้ว RCE Verify จะเริ่มเป็น batch ทันทีที่ probe ยืนยัน endpoint ระหว่าง fast scan" : S.lanFingerprint ? "มี active LAN probes หลัง fast scan โดยต้องยืนยันขอบเขตและ consent ก่อนเริ่ม" : "สแกนปกติแบบอ่านอย่างเดียว"}</div></div>`;
