@@ -1,4 +1,3 @@
-from . import mac_vendors
 """Scan orchestration:
 - Fast Mode ("fast"): TCP connect liveness & port scan + HTTP/PHP probe + CybersRMUTL (security-audit-toolkit)
 - Deep Mode ("deep"): Nmap service/version scan (-sT -sV) + Traceroute network path mapping
@@ -19,6 +18,7 @@ from . import chain_runner, demo_scenarios, discovery, dns_resolver, http_probe,
 from .ip_utils import expand_targets, label_targets
 from . import rce_batch
 from .rce_batch import RceVerifyBatchStream
+from . import mac_vendors
 
 
 def _now() -> datetime:
