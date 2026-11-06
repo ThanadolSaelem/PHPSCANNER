@@ -507,6 +507,7 @@ class ScanEngine:
                 devices.append(Device(
                     ip=ip, hostname=hostname, matched_suffix=matched_suffix, up=True,
                     mac=arp.get(ip) or tmeta.get("mac"),
+                    mac_vendor=discovery.lookup_mac_vendor(arp.get(ip) or tmeta.get("mac")),
                     device_type=discovery.infer_device_type(ip, web_open, has_tls, bool(other_open)),
                     device_type_confidence=Confidence.low,
                     device_type_source="fast-scan service role",

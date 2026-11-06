@@ -1,89 +1,188 @@
-/* Local-only CSV import parser for thscan. No network or file persistence. */
-(function (root) {
-  "use strict";
+"use strict";
 
-  const HEADER_NAMES = new Set(["ip", "ip address", "ip_address", "ip-address", "ipaddress", "ipv4", "ipv4 address"]);
+(function (root, factory) {
+  if (typeof define === "function" && define.amd) {
+    define([], factory);
+  } else if (typeof module === "object" && module.exports) {
+    module.exports = factory();
+  } else {
+    root.ThscanCsvImport = factory();
+  }
+})(typeof self !== "undefined" ? self : this, function () {
   const MAX_ROWS = 200000;
+  const IPV4_SHAPE_REGEX = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+  const IPV6_HINT_REGEX = /^[0-9a-fA-F:]+:[0-9a-fA-F:]+$/;
+  const HEADER_NAMES = new Set([
+    "ip",
+    "ip address",
+    "ip_address",
+    "ip-address",
+    "ipaddress",
+    "ipv4",
+    "ipv4 address",
+    "host",
+    "target",
+  ]);
 
   function canonicalIPv4(value) {
-    const text = String(value ?? "").trim();
-    const parts = text.split(".");
-    if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return null;
-    return parts.map((part) => String(Number(part))).join(".");
+    const str = String(value ?? "").trim();
+    if (!IPV4_SHAPE_REGEX.test(str)) return null;
+    const parts = str.split(".").map((v) => parseInt(v, 10));
+    if (parts.some((n) => isNaN(n) || n < 0 || n > 255)) return null;
+    return parts.join(".");
   }
 
-  function parseCsvIpTargets(text) {
-    if (typeof text !== "string") throw new Error("อ่านเนื้อหา CSV ไม่ได้");
-    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-
-    let cell = "", row = [], quoted = false, quoteClosed = false;
-    let physicalRow = 0, dataRows = 0, columnIndex = null;
-    let hasHeader = false, duplicates = 0, blankRows = 0;
-    const targets = [], seen = new Set();
-
-    function consumeRow() {
-      physicalRow += 1;
-      if (physicalRow > MAX_ROWS) throw new Error(`ไฟล์มีเกิน ${MAX_ROWS.toLocaleString("en-US")} แถวที่รองรับ`);
-      const cells = row;
-      row = [];
-      const nonempty = cells.some((value) => value.trim() !== "");
-      if (!nonempty) { blankRows += 1; return; }
-
-      if (columnIndex === null) {
-        const headerIndex = cells.findIndex((value) => HEADER_NAMES.has(value.trim().toLowerCase().replace(/\s+/g, " ")));
-        if (headerIndex >= 0) {
-          columnIndex = headerIndex;
-          hasHeader = true;
-          return;
-        }
-        columnIndex = 0; // Headerless files use the first column.
-      }
-
-      const ip = canonicalIPv4(cells[columnIndex] ?? "");
-      if (!ip) {
-        const reason = (cells[columnIndex] ?? "").trim() ? "ไม่ใช่ IPv4 ที่ถูกต้อง" : "ไม่มีค่า IP";
-        throw new Error(`แถว ${physicalRow}: ${reason} ในคอลัมน์ IP — ยกเลิกการนำเข้าทั้งไฟล์`);
-      }
-      dataRows += 1;
-      if (seen.has(ip)) duplicates += 1;
-      else { seen.add(ip); targets.push(ip); }
+  function classifyInvalidIp(raw) {
+    const val = String(raw ?? "").trim();
+    if (!val) return { kind: "empty", label: "ไม่มีข้อมูล IP" };
+    if (IPV6_HINT_REGEX.test(val) && val.includes(":")) {
+      return { kind: "ipv6", label: "เป็นรูปแบบ IPv6" };
     }
+    return { kind: "invalid", label: "ไม่ใช่ IPv4 ที่ถูกต้อง" };
+  }
 
-    for (let i = 0; i < text.length; i += 1) {
-      const ch = text[i];
-      if (quoted) {
-        if (ch === '"') {
-          if (text[i + 1] === '"') { cell += '"'; i += 1; }
-          else { quoted = false; quoteClosed = true; }
-        } else cell += ch;
+  function parseCsvIpTargets(text, options) {
+    if (typeof text !== "string") {
+      throw new Error("ข้อมูล CSV ต้องเป็นข้อความ");
+    }
+    const opts = options || {};
+    const allowSkipInvalid = !!opts.allowSkipInvalid;
+
+    const cleanText = text.replace(/^\uFEFF/, "");
+    const targets = [];
+    const seen = new Set();
+    const skippedRows = [];
+    let hasHeader = false;
+    let columnIndex = 0;
+    let duplicateCount = 0;
+    let blankRowCount = 0;
+    let totalValidRows = 0;
+    let physicalRow = 0;
+
+    let index = 0;
+    const len = cleanText.length;
+
+    while (index < len) {
+      physicalRow++;
+      if (physicalRow > MAX_ROWS) {
+        throw new Error(`ไฟล์ CSV มีจำนวนแถวเกิน ${MAX_ROWS.toLocaleString("en-US")} แถว`);
+      }
+
+      const cells = [];
+      let currentCell = "";
+      let inQuotes = false;
+
+      while (index < len) {
+        const char = cleanText[index];
+
+        if (inQuotes) {
+          if (char === '"') {
+            if (index + 1 < len && cleanText[index + 1] === '"') {
+              currentCell += '"';
+              index += 2;
+              continue;
+            } else {
+              inQuotes = false;
+              index++;
+              continue;
+            }
+          }
+          currentCell += char;
+          index++;
+        } else {
+          if (char === '"') {
+            inQuotes = true;
+            index++;
+          } else if (char === ",") {
+            cells.push(currentCell);
+            currentCell = "";
+            index++;
+          } else if (char === "\r") {
+            if (index + 1 < len && cleanText[index + 1] === "\n") {
+              index++;
+            }
+            index++;
+            break;
+          } else if (char === "\n") {
+            index++;
+            break;
+          } else {
+            currentCell += char;
+            index++;
+          }
+        }
+      }
+
+      if (inQuotes) {
+        throw new Error(`ข้อผิดพลาด CSV รูปแบบเครื่องหมายคำพูดไม่ถูกต้อง แถว ${physicalRow}`);
+      }
+
+      cells.push(currentCell);
+
+      if (cells.length === 1 && cells[0].trim() === "") {
+        blankRowCount++;
         continue;
       }
-      if (quoteClosed && ch !== "," && ch !== "\r" && ch !== "\n" && !/[ \t]/.test(ch)) {
-        throw new Error(`CSV รูปแบบไม่ถูกต้องใกล้แถว ${physicalRow + 1}`);
+
+      if (physicalRow === 1) {
+        const headerIdx = cells.findIndex((cell) => HEADER_NAMES.has(cell.trim().toLowerCase()));
+        if (headerIdx !== -1) {
+          hasHeader = true;
+          columnIndex = headerIdx;
+          continue;
+        }
       }
-      if (ch === '"') {
-        if (cell.length || quoteClosed) throw new Error(`CSV รูปแบบไม่ถูกต้องใกล้แถว ${physicalRow + 1}`);
-        quoted = true;
-      } else if (ch === ",") {
-        row.push(cell); cell = ""; quoteClosed = false;
-      } else if (ch === "\r" || ch === "\n") {
-        row.push(cell); cell = ""; quoteClosed = false;
-        consumeRow();
-        if (ch === "\r" && text[i + 1] === "\n") i += 1;
+
+      const rawIp = cells[columnIndex] !== undefined ? cells[columnIndex].trim() : "";
+      const canonicalIp = canonicalIPv4(rawIp);
+      if (!canonicalIp) {
+        const info = classifyInvalidIp(rawIp);
+        if (!allowSkipInvalid) {
+          const reason = rawIp ? "ไม่ใช่ IPv4 ที่ถูกต้อง" : "ไม่มีข้อมูล IP";
+          throw new Error(`แถว ${physicalRow}: ${reason} ในคอลัมน์ IP — ยกเลิกการนำเข้าทั้งไฟล์`);
+        }
+        skippedRows.push({
+          row: physicalRow,
+          value: rawIp || "(ว่าง)",
+          kind: info.kind,
+          reason: info.label,
+        });
+        continue;
+      }
+
+      totalValidRows++;
+      if (seen.has(canonicalIp)) {
+        duplicateCount++;
       } else {
-        cell += ch;
+        seen.add(canonicalIp);
+        targets.push(canonicalIp);
       }
     }
-    if (quoted) throw new Error("CSV มีเครื่องหมายอัญประกาศไม่ครบ");
-    if (cell.length || row.length || quoteClosed) {
-      row.push(cell);
-      consumeRow();
+
+    if (targets.length === 0) {
+      throw new Error("ไม่พบ IPv4 ที่ถูกต้องใน CSV");
     }
-    if (!targets.length) throw new Error("ไม่พบ IPv4 ในไฟล์ CSV");
-    return { targets, rows: dataRows, duplicates, blankRows, hasHeader, columnIndex };
+
+    return {
+      targets: targets,
+      totalValidRows: totalValidRows,
+      hasHeader: hasHeader,
+      columnIndex: columnIndex,
+      duplicates: duplicateCount,
+      blankRows: blankRowCount,
+      skippedRows: skippedRows,
+    };
   }
 
-  const api = { parseCsvIpTargets, MAX_ROWS };
-  root.ThscanCsvImport = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-})(globalThis);
+  function buildCleanCsvText(targets, headerName) {
+    const hdr = headerName || "ip";
+    return "\uFEFF" + [hdr, ...(targets || [])].join("\r\n") + "\r\n";
+  }
+
+  return {
+    MAX_ROWS: MAX_ROWS,
+    canonicalIPv4: canonicalIPv4,
+    parseCsvIpTargets: parseCsvIpTargets,
+    buildCleanCsvText: buildCleanCsvText,
+  };
+});

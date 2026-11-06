@@ -51,6 +51,8 @@ const P = {
   search: "M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Z M16 16l4 4", print: "M7 9V4h10v5 M4 9h16v8H4Z M7 14h10v6H7Z",
   trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3", clock: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Z M12 7.5V12l3 2",
   shield: "M12 3 20 6v6c0 4.6-3.3 8.3-8 9.5C7.3 20.3 4 16.6 4 12V6Z",
+  upload: "M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2",
+  file: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Zm0 0v5h5M9 13h6M9 17h4",
 };
 const ic = (name, size = 18, sw = 2) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name]}"/></svg>`;
 const chev = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="${P.chev}"/></svg>`;
@@ -414,7 +416,7 @@ function openDemoPicker() {
 
 /* ═══ view: scan ═══════════════════════════════════════════════════════ */
 const S = { init: false, mode: "subnet", oct: ["192", "168", "1", "0"], prefix: 24, single: ["192", "168", "1", "1"], rs: "1", re: "254",
-  site: "", text: "", csvTargets: null, csvImportToken: 0, csvImportPending: false, profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
+  site: "", text: "", csvTargets: null, csvStats: null, csvFileName: "", csvFileSize: 0, csvRawText: "", csvSmartFilter: true, csvError: "", csvImportToken: 0, csvImportPending: false, profile: "common", custom: "22, 80, 8000-8100", speed: 0, delay: 0, swap: 0, mode2: "fast", rceVerify: false, lanFingerprint: false, report: null, reportFor: "", detected: [] };
 const MAX_CSV_FILE_BYTES = 20 * 1024 * 1024;
 const MODES = [
   ["subnet", "ทั้งวง", "ทุกเครื่องในวงเดียวกัน", "plate"], ["range", "ช่วง IP", "เช่น เครื่องที่ 10 ถึง 50", "range"],
@@ -781,12 +783,67 @@ function renderTargetPanel() {
   else if (S.mode === "site") input = `<label style="display:block"><span class="lbl">ลิงก์หรือชื่อโดเมนเว็บไซต์ ${tip("วางลิงก์หรือชื่อโดเมน เช่น https://example.com ระบบจะค้นหา IP จาก DNS ให้ และส่งชื่อโดเมนไปด้วยเพื่อให้ได้ผลของเว็บนั้นจริง · ใส่ได้หลายเว็บคั่นด้วยเว้นวรรคหรือจุลภาค")}</span>
     <input class="inp" id="site-in" value="${esc(S.site)}" placeholder="https://example.com" autocomplete="off" spellcheck="false"></label><div id="site-preview" aria-live="polite" style="margin-top:8px"></div>`;
   else input = `<label style="display:block"><span class="lbl">ซับเน็ต ช่วง หรือ IP คั่นด้วยจุลภาค</span><input class="inp" id="text-in" value="${esc(S.text)}" placeholder="10.0.5.0/24, 10.0.6.10-50, 10.0.7.3" autocomplete="off" spellcheck="false"></label>`;
-  const csvImport = `<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--soft)">
-    <label class="lbl" for="ip-csv">นำเข้า IP จากไฟล์ CSV</label>
-    <input class="inp" id="ip-csv" type="file" accept=".csv,text/csv" aria-describedby="csv-import-help">
-    <p class="od" id="csv-import-help" style="margin-top:6px">อ่านไฟล์ในเบราว์เซอร์และไม่บันทึกไฟล์บนเซิร์ฟเวอร์ · ใช้คอลัมน์ <span class="mono">IP</span> หรือ <span class="mono">IP Address</span>; ถ้าไม่มีหัวตารางจะใช้คอลัมน์แรก · IPv4 เท่านั้น · ไม่เกิน 20 MB</p>
-    <div id="csv-import-status" role="status" aria-live="polite" style="margin-top:8px;font-size:13px">${S.csvTargets ? `นำเข้าแล้ว ${num(S.csvTargets.length)} IP ไม่ซ้ำ` : ""}</div>
-    ${S.csvTargets ? `<button type="button" class="btn" data-clear-csv style="margin-top:6px">ล้างรายการที่นำเข้า</button>` : ""}
+  const st = S.csvStats || {};
+  const skipped = st.skippedRows || [];
+  const dupCount = st.duplicates || 0;
+  const previewIps = (S.csvTargets || []).slice(0, 5);
+  const moreCount = Math.max(0, (S.csvTargets || []).length - previewIps.length);
+  const sizeStr = S.csvFileSize > 1048576 ? `${(S.csvFileSize / 1048576).toFixed(2)} MB` : S.csvFileSize > 1024 ? `${(S.csvFileSize / 1024).toFixed(1)} KB` : S.csvFileSize ? `${S.csvFileSize} B` : "";
+  let csvStatusHtml = "";
+  if (S.csvImportPending) {
+    csvStatusHtml = `<div class="csv-shimmer-wrap">
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;font-weight:600;color:var(--blue-ink)">
+        <span>กำลังวิเคราะห์และคัดกรองเลข IPv4 จาก ${esc(S.csvFileName || "ไฟล์ CSV")}…</span>
+        <span class="mono">${esc(sizeStr)}</span>
+      </div>
+      <div class="csv-shimmer-bar"></div>
+    </div>`;
+  } else if (S.csvError) {
+    csvStatusHtml = `<div class="csv-card-err">
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <span style="flex:none;margin-top:1px">${ic("alert", 16, 2.4)}</span>
+        <div style="flex:1;min-width:0"><div style="font-weight:700">${esc(S.csvError)}</div></div>
+      </div>
+    </div>`;
+  } else if (S.csvTargets && S.csvTargets.length) {
+    csvStatusHtml = `<div class="csv-card-ok">
+      <div class="csv-card-top">
+        <div class="csv-file-pill">
+          <span class="csv-file-ic">${ic("check", 15, 2.8)}</span>
+          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(S.csvFileName || "นำเข้าสำเร็จ")}</span>
+          ${sizeStr ? `<span class="badge b-grey" style="font-size:11px;padding:2px 7px">${esc(sizeStr)}</span>` : ""}
+        </div>
+        <button type="button" class="btn" data-clear-csv style="min-height:34px;padding:4px 10px;font-size:12px">${ic("trash", 14, 2.2)} ยกเลิกการใช้นำเข้าจาก CSV</button>
+      </div>
+      <div class="csv-stats">
+        <div class="csv-stat"><span class="csv-stat-k">พร้อมสแกน (IPv4 ไม่ซ้ำ)</span><span class="csv-stat-v" style="color:var(--ok)">${num(S.csvTargets.length)} <small style="font-size:11.5px;font-weight:600">IP</small></span></div>
+        <div class="csv-stat"><span class="csv-stat-k">รวม IP ที่ซ้ำกันให้แล้ว</span><span class="csv-stat-v" style="color:var(--blue-ink)">${num(dupCount)} <small style="font-size:11.5px;font-weight:600">แถว</small></span></div>
+        <div class="csv-stat"><span class="csv-stat-k">ข้าม IPv6 / ผิดรูปแบบ</span><span class="csv-stat-v" style="color:${skipped.length ? "var(--warn)" : "var(--muted)"}">${num(skipped.length)} <small style="font-size:11.5px;font-weight:600">แถว</small></span></div>
+      </div>
+      <div class="csv-chips">
+        ${previewIps.map((ip, idx) => `<span class="csv-chip" style="animation-delay:${idx * 45}ms">${esc(ip)}</span>`).join("")}
+        ${moreCount > 0 ? `<span class="csv-chip more" style="animation-delay:225ms">+อีก ${num(moreCount)} IP</span>` : ""}
+      </div>
+      ${skipped.length ? `<details class="csv-skip-box"><summary><span>${ic("warn", 14, 2.4)} ข้ามแถวที่ไม่ใช่ IPv4 จำนวน ${num(skipped.length)} แถวอัตโนมัติ</span><span class="badge b-warn" style="font-size:11px;padding:2px 7px">กรองแล้ว</span></summary><ul class="csv-skip-list">${skipped.slice(0, 15).map((item) => `<li>แถว <b>${num(item.row)}</b>: <span class="mono">${esc(item.value)}</span> — ${esc(item.reason)}</li>`).join("")}${skipped.length > 15 ? `<li>…และอีก ${num(skipped.length - 15)} แถว</li>` : ""}</ul></details>` : ""}
+    </div>`;
+  }
+  const csvImport = `<div class="csv-wrap">
+    <div class="csv-head">
+      <span class="csv-title">${ic("file", 16, 2.2)} นำเข้า IP จากไฟล์ CSV <span class="csv-title-badge">Drag &amp; Drop</span></span>
+      <label class="csv-switch" title="เมื่อเปิดไว้ ระบบจะข้ามแถวที่เป็น IPv6 หรือข้อมูลว่างให้อัตโนมัติโดยไม่ยกเลิกทั้งไฟล์">
+        <input type="checkbox" id="csv-smart-toggle" ${S.csvSmartFilter !== false ? "checked" : ""}>
+        <span>กรอง IPv6 &amp; ตัดซ้ำอัตโนมัติ</span>
+      </label>
+    </div>
+    <div class="csv-drop" id="csv-dropzone">
+      <input class="csv-file-in inp" id="ip-csv" type="file" accept=".csv,text/csv" aria-describedby="csv-import-help">
+      <div class="csv-orb" aria-hidden="true">${ic("upload", 22, 2.3)}</div>
+      <div class="csv-drop-body">
+        <div class="csv-drop-main">ลากไฟล์ <span class="mono">.csv</span> มาวางที่นี่ หรือ <span class="csv-drop-cta">คลิกเลือกไฟล์</span></div>
+        <p class="csv-drop-sub" id="csv-import-help">รองรับไฟล์ CSV ที่มีคอลัมน์ <span class="mono">IP</span> หรือ <span class="mono">IP Address</span> · รูปแบบ IPv4 · ขนาดไม่เกิน 20 MB</p>
+      </div>
+    </div>
+    <div id="csv-import-status" role="status" aria-live="polite">${csvStatusHtml}</div>
   </div>`;
   const det = S.detected.length && S.mode !== "site" ? `<div style="margin-top:12px"><span class="lbl">ระบบหาให้แล้ว ${tip("วงเครือข่ายที่เครื่องนี้เชื่อมต่ออยู่ กดเพื่อใช้ได้ทันที")}</span>
     <div style="display:flex;flex-direction:column;gap:6px">${S.detected.map((d) => `<button type="button" class="opt" data-detected="${esc(d.cidr)}" ${d.ok ? "" : "disabled"} style="min-height:46px"><span style="flex:1;min-width:0"><span class="ot">${esc(d.cidr)}</span><span class="od">${esc(d.name)}</span></span><span class="badge ${d.ok ? "b-blue" : "b-grey"}">${d.ok ? `ใช้วงนี้ · ${num(d.hosts)}` : "นอกขอบเขต"}</span></button>`).join("")}</div></div>` : "";
@@ -1471,7 +1528,7 @@ function paintTabs() {
       : `<p class="muted" style="font-size:14px">ไม่พบพอร์ตที่เปิด${(R.job.scanned_ports || []).length ? ` จาก ${num(R.job.scanned_ports.length)} พอร์ตที่ตรวจ` : ""}</p>`;
   } else {
     const kv = [["IP", d.ip, ""], ["ชื่อโฮสต์", d.hostname || "—", "ชื่อจากการค้นหา DNS ย้อนกลับ ถ้าไม่ได้ตั้งไว้จะว่าง"],
-      ["MAC", d.mac || "—", "หมายเลขการ์ดเครือข่าย เห็นได้จากตาราง ARP ใน LAN เดียวกันเท่านั้น; หากผ่าน router อาจเป็น MAC ของ next hop และ OUI ไม่ยืนยันชนิดหรือรุ่นอุปกรณ์"], ["บทบาท/ชนิด", devType(d.device_type), "เป็นเพียงข้อสันนิษฐานจากบริการหรือ LAN protocol ไม่ยืนยัน ownership, hardware หรือ OS; IP ลงท้าย .1/.254 เพียงอย่างเดียวไม่เพียงพอจะสรุปว่าเป็น router"],
+      ["MAC / ผู้ผลิต", d.mac ? `${d.mac}${d.mac_vendor ? ` · ${d.mac_vendor}` : ""}` : "—", "หมายเลขการ์ดเครือข่าย เห็นได้จากตาราง ARP ใน LAN เดียวกันเท่านั้น; หากผ่าน router อาจเป็น MAC ของ next hop และ OUI ไม่ยืนยันชนิดหรือรุ่นอุปกรณ์"], ["บทบาท/ชนิด", devType(d.device_type), "เป็นเพียงข้อสันนิษฐานจากบริการหรือ LAN protocol ไม่ยืนยัน ownership, hardware หรือ OS; IP ลงท้าย .1/.254 เพียงอย่างเดียวไม่เพียงพอจะสรุปว่าเป็น router"],
       ["ความเชื่อมั่นชนิด", CONF[d.device_type_confidence] || d.device_type_confidence || "ต่ำ", "ค่าความเชื่อมั่นเป็น heuristic ไม่ใช่การยืนยันอุปกรณ์"], ["แหล่งหลักฐาน", d.device_type_source || "fast-scan service role", "เช่น fast scan, NetBIOS, mDNS หรือ SSDP"], ["หลักฐาน fingerprint", (d.device_type_evidence || []).join(" · ") || "ไม่มีหลักฐานระบุชนิด", "ข้อมูลที่สังเกตได้ถูกจำกัดและอาจบ่งชี้เพียงบทบาท/ระบบที่เข้ากันได้"], ["สถานะ LAN fingerprint", d.lan_fingerprint_status || "not_requested", "not_requested หมายถึงไม่ได้เลือกใช้; completed_no_match หมายถึงไม่มีข้อมูลตอบกลับที่ระบุชนิดได้"],
       ["Runtime", runtimeOf(d) || "—", "ซอฟต์แวร์ที่ให้บริการเว็บ เช่น PHP, Node.js/Express หรือเว็บเซิร์ฟเวอร์ (nginx/Apache)"], ["เวอร์ชัน PHP", d.php_version || "ไม่พบ", "อ่านจาก header ที่เว็บตอบกลับ ถ้าเว็บซ่อนไว้จะไม่เห็น"], ["เว็บเซิร์ฟเวอร์", d.server || "—", ""],
       ["CMS", d.cms || "—", ""], ["พอร์ตเว็บ", d.open_ports.join(", ") || "—", "พอร์ตที่ตอบกลับเป็นเว็บจริงระหว่างการสแกน"],

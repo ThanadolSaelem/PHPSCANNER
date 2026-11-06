@@ -121,6 +121,7 @@ class Device(CompatBaseModel):
     matched_suffix: Optional[str] = None
     up: bool = True
     mac: Optional[str] = None
+    mac_vendor: Optional[str] = None
     device_type: str = "LAN Device"
     device_type_confidence: Confidence = Confidence.low
     device_type_source: str = "fast-scan service role"

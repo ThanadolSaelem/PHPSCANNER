@@ -13,6 +13,7 @@ import asyncio
 import importlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sys
@@ -372,47 +373,19 @@ async def run_for_targets(
     return out
 
 
-
-def rce_verify_available() -> bool:
-    """Return True only when the toolkit module exposes its active verifier."""
+async def run_rce_verify_target(target: str, settings: Settings,
+                                evidence_dir: Optional[str] = None,
+                                operator: Optional[str] = None,
+                                i_own_this_target: bool = False) -> Dict[str, Any]:
+    """Run CybersRMUTL RCE Verify against a single target through the bundled
+    security_audit_toolkit module, returning a JSON-serialisable result dict."""
     try:
         from . import rce_verify
-        return rce_verify.available()
-    except Exception:  # pragma: no cover - optional toolkit/package failure
-        return False
-
-
-async def run_rce_verify_target(
-    target_url: str,
-    settings: Settings,
-    *,
-    evidence_dir: Optional[str] = None,
-    operator: Optional[str] = None,
-    lfi_url: Optional[str] = None,
-    session_endpoint: Optional[str] = None,
-    timeout: float = 10.0,
-    no_verify_ssl: bool = False,
-    pinned_ip: Optional[str] = None,
-    max_concurrency: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Run the bounded verifier, optionally pinned to a scan-confirmed address."""
-    try:
-        from . import rce_verify
-    except Exception:  # pragma: no cover - optional toolkit/package failure
-        return {
-            "ran": False, "target": target_url, "verdict": "ERROR", "summary": {},
-            "evidence_dir": None, "evidence_files": [],
-            "error": "rce_verify adapter is unavailable",
-        }
-    return await rce_verify.run(
-        target_url,
-        evidence_dir=evidence_dir,
-        lfi_url=lfi_url,
-        session_endpoint=session_endpoint,
-        timeout=timeout,
-        total_timeout=float(getattr(settings, "rce_verify_total_timeout_s", 180)),
-        no_verify_ssl=no_verify_ssl,
-        operator=operator,
-        pinned_ip=pinned_ip,
-        max_concurrency=max_concurrency or int(getattr(settings, "rce_verify_max_workers", 2)),
-    )
+    except Exception:  # pragma: no cover - packaging issue
+        return {"ran": False, "target": target, "verdict": "ERROR",
+                "summary": {}, "evidence_dir": None, "evidence_files": [],
+                "error": "rce_verify adapter not available"}
+    timeout = float(getattr(settings, "rce_chain_timeout_s", 90))
+    return await rce_verify.run(target, evidence_dir=evidence_dir,
+                                timeout=timeout, operator=operator,
+                                i_own_this_target=i_own_this_target)

@@ -78,32 +78,15 @@ class Settings:
             ["go.th", "or.th", "mi.th", "ac.th", "in.th"],
         )
     )
-    # When False (the default), the operator may run the standard fast/deep scan
-    # against any target they type; deployment scope and gov-domain rules are
-    # advisory labels. Set THSCAN_ENFORCE_SCOPE=1 to impose them as scan limits.
-    # RCE and LAN fingerprinting are separate active options with their own
-    # server-side gates and per-run consent; LAN fingerprinting also enforces a
-    # directly attached RFC1918 interface boundary independent of this setting.
+    # When False (the default), the operator may scan any target they type —
+    # the deploy-time CIDR scope and the gov-domain rule become advisory labels,
+    # not hard blocks. Set THSCAN_ENFORCE_SCOPE=1 to re-impose them as limits.
+    # The operator is responsible for scanning only networks they are authorised
+    # to test; thscan stays non-destructive (read-only) either way.
     enforce_scope: bool = _env_bool("THSCAN_ENFORCE_SCOPE", False)
     traceroute_max: int = _env_int("THSCAN_TRACEROUTE_MAX", 16)
     rce_chain_enabled: bool = _env_bool("THSCAN_RCE_CHAIN_ENABLED", True)
     rce_chain_timeout_s: int = _env_int("THSCAN_RCE_CHAIN_TIMEOUT", 90)
-    rce_verify_enabled: bool = _env_bool("THSCAN_RCE_VERIFY_ENABLED", False)
-    rce_verify_total_timeout_s: int = _env_int("THSCAN_RCE_VERIFY_TOTAL_TIMEOUT", 180)
-    rce_verify_max_endpoints: int = _env_int("THSCAN_RCE_VERIFY_MAX_ENDPOINTS", 0)
-    rce_verify_max_workers: int = _env_int("THSCAN_RCE_VERIFY_MAX_WORKERS", 2)
-    rce_verify_memory_reserve_mb: int = _env_int("THSCAN_RCE_VERIFY_MEMORY_RESERVE_MB", 1024)
-    rce_verify_worker_memory_mb: int = _env_int("THSCAN_RCE_VERIFY_WORKER_MEMORY_MB", 512)
-    rce_verify_batch_timeout_s: int = _env_int("THSCAN_RCE_VERIFY_BATCH_TIMEOUT", 7200)
-    rce_verify_token: str = field(
-        default_factory=lambda: os.environ.get("THSCAN_RCE_VERIFY_TOKEN", "")
-    )
-    # LAN fingerprinting is separately opt-in and never grants raw-socket access.
-    lan_fingerprint_enabled: bool = _env_bool("THSCAN_LAN_FINGERPRINT_ENABLED", False)
-    lan_fingerprint_max_targets: int = _env_int("THSCAN_LAN_FINGERPRINT_MAX_TARGETS", 256)
-    lan_fingerprint_max_workers: int = _env_int("THSCAN_LAN_FINGERPRINT_MAX_WORKERS", 4)
-    lan_fingerprint_probe_timeout_s: float = _env_float("THSCAN_LAN_FINGERPRINT_PROBE_TIMEOUT", 0.8)
-    lan_fingerprint_total_timeout_s: int = _env_int("THSCAN_LAN_FINGERPRINT_TOTAL_TIMEOUT", 90)
     data_dir: str = field(default_factory=_default_data_dir)
 
     def allowed_networks(self) -> List[ipaddress.IPv4Network]:

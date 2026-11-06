@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
@@ -285,62 +284,18 @@ EXPOSURE_PROBES: List[Tuple[str, str, str, Severity, str, str, List[str], float]
 class WebResult:
     port: int
     scheme: str
-    hostname: Optional[str] = None
-    probe_port: Optional[int] = None
-    probe_scheme: Optional[str] = None
     status_code: Optional[int] = None
     server: Optional[str] = None
     powered_by: Optional[str] = None
     php_version: Optional[str] = None
     cms: Optional[str] = None
     runtime: Optional[str] = None
-    http_title: Optional[str] = None
-    technologies: List[str] = field(default_factory=list)
-    banner_snippet: str = ""
     findings: List[Finding] = field(default_factory=list)
     headers: Dict[str, str] = field(default_factory=dict)
     fingerprint: str = ""
 
 
 _VOLATILE = {"date", "set-cookie", "content-length", "age", "expires", "etag", "last-modified"}
-
-
-class _TitleParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.in_title = False
-        self.parts: List[str] = []
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag.lower() == "title":
-            self.in_title = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "title":
-            self.in_title = False
-
-    def handle_data(self, data: str) -> None:
-        if self.in_title and sum(map(len, self.parts)) < 512:
-            self.parts.append(data[:512])
-
-
-def _extract_title(body: str) -> Optional[str]:
-    parser = _TitleParser()
-    try:
-        parser.feed(body[:_MAX_BODY])
-    except (ValueError, AssertionError):
-        return None
-    title = " ".join(" ".join(parser.parts).split())[:512]
-    return title or None
-
-
-def _safe_banner_snippet(http_version: str, status: int, reason: str, headers: Dict[str, str]) -> str:
-    """Build a short banner from status and an allowlist; never export cookies or arbitrary headers."""
-    status_line = " ".join(part for part in (http_version, str(status), reason) if part).strip()
-    allowed = ("server", "x-powered-by", "content-type", "x-aspnet-version", "x-generator", "via")
-    parts = [status_line] if status_line else []
-    parts.extend(f"{name}: {headers[name]}" for name in allowed if headers.get(name))
-    return "  ".join(parts)[:1200]
 
 
 def response_fingerprint(status: Optional[int], headers: Dict[str, str]) -> str:
@@ -520,7 +475,6 @@ async def _try(
 ) -> Optional[WebResult]:
     """GET the page, following redirects only while they stay on the same host."""
     name = host or ip
-    probe_scheme, probe_port = scheme, port
     path = "/"
     hop_headers: Dict[str, str] = {}
     for _ in range(_MAX_HOPS + 1):
@@ -557,26 +511,15 @@ async def _try(
     findings, php_version, cms, server = vuln_rules.evaluate(
         scheme=scheme, headers=merged, body=body, final_url=f"{scheme}://{name}:{port}{path}"
     )
-    powered_by = merged.get("x-powered-by")
-    runtime = vuln_rules.runtime_label(merged, body, php_version)
-    technologies = list(dict.fromkeys(x for x in (runtime, cms, powered_by) if x))
     return WebResult(
         port=port,
         scheme=scheme,
-        hostname=name,
-        probe_port=probe_port,
-        probe_scheme=probe_scheme,
         status_code=resp.status_code,
         server=server,
-        powered_by=powered_by,
+        powered_by=merged.get("x-powered-by"),
         php_version=php_version,
         cms=cms,
-        runtime=runtime,
-        http_title=_extract_title(body),
-        technologies=technologies,
-        banner_snippet=_safe_banner_snippet(
-            resp.http_version, resp.status_code, resp.reason_phrase, merged
-        ),
+        runtime=vuln_rules.runtime_label(merged, body, php_version),
         findings=findings,
         headers=merged,
         fingerprint=response_fingerprint(resp.status_code, headers_lc),

@@ -480,7 +480,7 @@ async def export_json(job_id: str) -> Response:
 
 @app.get("/api/audit")
 async def get_audit_log() -> dict:
-    return {"entries": store.audit.read_recent(100)}
+    return {"entries": store.audit.read_recent(100), "integrity": store.audit.verify_chain()}
 
 
 @app.get("/api/schedules")
