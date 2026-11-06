@@ -1,1 +1,1 @@
-"""Scan engine."""
+"""Scan engine package."""

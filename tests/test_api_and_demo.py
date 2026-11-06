@@ -97,21 +97,79 @@ async def test_history_and_schedules_survive_restart(tmp_path):
 
 def test_csv_cell_neutralises_formulas():
     from app.main import _csv_cell
-    assert _csv_cell("=HYPERLINK(\"x\")") == "'=HYPERLINK(\"x\")"
+    assert _csv_cell('=HYPERLINK("x")') == "'=HYPERLINK(\"x\")"
     assert _csv_cell("@cmd") == "'@cmd"
     assert _csv_cell("portal.go.th") == "portal.go.th"
     assert _csv_cell(None) == ""
 
 
+def test_scan_csv_rows_use_requested_schema_without_guessing_cloud_metadata():
+    from app.main import CSV_EXPORT_COLUMNS, _scan_csv_rows
+    from app.models import ServicePort, WebEndpoint
+
+    now = datetime.now(timezone.utc)
+    device = Device(
+        ip="203.0.113.9", hostname="host.example.test", device_type="Web Server (HTTP)",
+        open_ports=[80, 22],
+        services=[
+            ServicePort(port=80, name="HTTP"),
+            ServicePort(port=22, name="SSH", product="OpenSSH 9.0"),
+        ],
+        web_endpoints=[WebEndpoint(
+            ip="203.0.113.9", hostname="host.example.test", port=80, scheme="http",
+            http_title="Test page", server="Apache", powered_by="PHP/8.2.35",
+            technologies=["PHP 8.2.35"], banner_snippet="HTTP/1.1 200 OK  Server: Apache",
+        )],
+    )
+    job = ScanJob(
+        id="csv-test", created_at=now, finished_at=now,
+        request=ScanRequest(targets=[device.ip]), devices=[device],
+    )
+    rows = _scan_csv_rows(job)
+    assert len(CSV_EXPORT_COLUMNS) == 24
+    assert len(rows) == 2 and all(len(row) == len(CSV_EXPORT_COLUMNS) for row in rows)
+    by_port = {row[1]: dict(zip(CSV_EXPORT_COLUMNS, row)) for row in rows}
+    assert by_port[80]["HTTP Title"] == "Test page"
+    assert by_port[80]["HTTP Server"] == "Apache"
+    assert by_port[80]["X-Powered-By"] == "PHP/8.2.35"
+    assert by_port[80]["Technologies"] == "PHP 8.2.35"
+    assert by_port[80]["Banner Snippet"].startswith("HTTP/1.1 200 OK")
+    assert by_port[22]["Banner Snippet"] == "OpenSSH 9.0"
+    assert by_port[22]["HTTP Server"] == ""
+    assert by_port[80]["IaaS Cloud Provider"] == ""
+    assert by_port[80]["Cloud ASN"] == ""
+    assert by_port[80]["Country"] == ""
+    assert by_port[80]["Confidence Level"].startswith("Not assessed")
+
+
+def test_http_title_and_banner_snippet_are_bounded_and_exclude_cookies():
+    from app.scanner.http_probe import _extract_title, _safe_banner_snippet
+
+    assert _extract_title("<html><title> Example &amp; Test </title></html>") == "Example & Test"
+    snippet = _safe_banner_snippet("HTTP/1.1", 200, "OK", {
+        "server": "ExampleServer", "x-powered-by": "PHP", "set-cookie": "session=secret",
+    })
+    assert "HTTP/1.1 200 OK" in snippet
+    assert "ExampleServer" in snippet and "PHP" in snippet
+    assert "session" not in snippet and "secret" not in snippet
+    assert len(_safe_banner_snippet("HTTP/1.1", 200, "OK", {"server": "X" * 5000})) <= 1200
+
+
 def test_app_lifespan_starts_and_stops_scheduler():
     from fastapi.testclient import TestClient
 
-    from app.main import app, scheduler
+    from app.main import app, scheduler, settings
 
-    with TestClient(app) as client:
-        assert client.get("/healthz").status_code == 200
-        assert scheduler._task is not None and not scheduler._task.done()
-    assert scheduler._task is None
+    previous_cap = settings.rce_verify_max_endpoints
+    settings.rce_verify_max_endpoints = 0
+    try:
+        with TestClient(app) as client:
+            assert client.get("/healthz").status_code == 200
+            assert client.get("/api/config").json()["rce_verify_max_endpoints"] == 0
+            assert scheduler._task is not None and not scheduler._task.done()
+        assert scheduler._task is None
+    finally:
+        settings.rce_verify_max_endpoints = previous_cap
 
 
 async def test_cancel_immediately_stops_in_flight_scan(monkeypatch, tmp_path):

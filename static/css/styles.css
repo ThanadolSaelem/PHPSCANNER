@@ -384,7 +384,6 @@ body:has(.dock:hover) .dock:not(:hover) > .fly { opacity: 0; visibility: hidden;
    empty space between the buttons pass drags through to the ring */
 .dial-ctl { position: relative; z-index: 3; margin-top: -14px; display: flex; align-items: center; justify-content: center; gap: 16px; pointer-events: none; }
 .dial-ctl > .round { pointer-events: auto; }
-
 /* ── CSV Upload Dropzone & Smart Analyzer ── */
 @keyframes csvFloat {
   0%, 100% { transform: translateY(0px) rotate(0deg); }
@@ -716,4 +715,16 @@ body:has(.dock:hover) .dock:not(:hover) > .fly { opacity: 0; visibility: hidden;
 }
 #p-dark.csv-active-pulse {
   animation: csvDotPulse 2.4s ease-in-out infinite;
+}
+
+#csv-import-status:not(:empty):not(.sr) {
+  margin-top: 10px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  background: var(--crit-bg);
+  border: 1px solid var(--crit-line);
+  color: #8E1B22;
+  font-weight: 600;
+  font-size: 12.5px;
+  animation: csvShake .4s ease;
 }

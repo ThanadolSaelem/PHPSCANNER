@@ -130,3 +130,9 @@ class AuditLog:
             "checked": checked,
             "head_sha256": head_sha256 or GENESIS_HASH,
         }
+
+    def query(self, event: str | None = None, limit: int = 100) -> List[Dict[str, Any]]:
+        items = self.read_recent(limit=max(limit * 2, 100))
+        if event:
+            items = [x for x in items if x.get("event") == event]
+        return items[:limit]

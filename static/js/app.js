@@ -798,22 +798,18 @@ function renderTargetPanel() {
       </div>
       <div class="csv-shimmer-bar"></div>
     </div>`;
-  } else if (S.csvError) {
-    csvStatusHtml = `<div class="csv-card-err">
-      <div style="display:flex;align-items:flex-start;gap:8px">
-        <span style="flex:none;margin-top:1px">${ic("alert", 16, 2.4)}</span>
-        <div style="flex:1;min-width:0"><div style="font-weight:700">${esc(S.csvError)}</div></div>
-      </div>
-    </div>`;
   } else if (S.csvTargets && S.csvTargets.length) {
     csvStatusHtml = `<div class="csv-card-ok">
       <div class="csv-card-top">
         <div class="csv-file-pill">
           <span class="csv-file-ic">${ic("check", 15, 2.8)}</span>
-          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(S.csvFileName || "นำเข้าสำเร็จ")}</span>
+          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(S.csvFileName || "นำเข้าไฟล์ CSV สำเร็จ")}</span>
           ${sizeStr ? `<span class="badge b-grey" style="font-size:11px;padding:2px 7px">${esc(sizeStr)}</span>` : ""}
         </div>
-        <button type="button" class="btn" data-clear-csv style="min-height:34px;padding:4px 10px;font-size:12px">${ic("trash", 14, 2.2)} ยกเลิกการใช้นำเข้าจาก CSV</button>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${(dupCount > 0 || skipped.length > 0) ? `<button type="button" class="btn" data-dl-clean-csv style="min-height:34px;padding:4px 10px;font-size:12px">${ic("download", 14, 2.3)} ดาวน์โหลด CSV ที่คลีนแล้ว</button>` : ""}
+          <button type="button" class="btn" data-clear-csv style="min-height:34px;padding:4px 10px;font-size:12px">${ic("trash", 14, 2.2)} ยกเลิกการใช้นำเข้าจาก CSV</button>
+        </div>
       </div>
       <div class="csv-stats">
         <div class="csv-stat"><span class="csv-stat-k">พร้อมสแกน (IPv4 ไม่ซ้ำ)</span><span class="csv-stat-v" style="color:var(--ok)">${num(S.csvTargets.length)} <small style="font-size:11.5px;font-weight:600">IP</small></span></div>
@@ -824,7 +820,7 @@ function renderTargetPanel() {
         ${previewIps.map((ip, idx) => `<span class="csv-chip" style="animation-delay:${idx * 45}ms">${esc(ip)}</span>`).join("")}
         ${moreCount > 0 ? `<span class="csv-chip more" style="animation-delay:225ms">+อีก ${num(moreCount)} IP</span>` : ""}
       </div>
-      ${skipped.length ? `<details class="csv-skip-box"><summary><span>${ic("warn", 14, 2.4)} ข้ามแถวที่ไม่ใช่ IPv4 จำนวน ${num(skipped.length)} แถวอัตโนมัติ</span><span class="badge b-warn" style="font-size:11px;padding:2px 7px">กรองแล้ว</span></summary><ul class="csv-skip-list">${skipped.slice(0, 15).map((item) => `<li>แถว <b>${num(item.row)}</b>: <span class="mono">${esc(item.value)}</span> — ${esc(item.reason)}</li>`).join("")}${skipped.length > 15 ? `<li>…และอีก ${num(skipped.length - 15)} แถว</li>` : ""}</ul></details>` : ""}
+      ${skipped.length ? `<details class="csv-skip-box"><summary><span>${ic("warn", 14, 2.4)} ข้ามแถวที่ไม่ใช่ IPv4 จำนวน ${num(skipped.length)} แถวให้อัตโนมัติ (คลิกเพื่อดูรายละเอียด)</span><span class="badge b-warn" style="font-size:11px;padding:2px 7px">กรองแล้ว</span></summary><ul class="csv-skip-list">${skipped.slice(0, 15).map((item) => `<li>แถว <b>${num(item.row)}</b>: <span class="mono">${esc(item.value)}</span> — ${esc(item.reason)}</li>`).join("")}${skipped.length > 15 ? `<li>…และอีก ${num(skipped.length - 15)} แถว</li>` : ""}</ul></details>` : ""}
     </div>`;
   }
   const csvImport = `<div class="csv-wrap">
@@ -843,7 +839,8 @@ function renderTargetPanel() {
         <p class="csv-drop-sub" id="csv-import-help">รองรับไฟล์ CSV ที่มีคอลัมน์ <span class="mono">IP</span> หรือ <span class="mono">IP Address</span> · รูปแบบ IPv4 · ขนาดไม่เกิน 20 MB</p>
       </div>
     </div>
-    <div id="csv-import-status" role="status" aria-live="polite">${csvStatusHtml}</div>
+    <div id="csv-import-card">${csvStatusHtml}</div>
+    <div id="csv-import-status" class="${S.csvTargets && S.csvTargets.length ? "sr" : ""}" role="status" aria-live="polite">${S.csvTargets ? `นำเข้าสำเร็จ ${num(S.csvTargets.length)} IP เรียบร้อย` : ""}</div>
   </div>`;
   const det = S.detected.length && S.mode !== "site" ? `<div style="margin-top:12px"><span class="lbl">ระบบหาให้แล้ว ${tip("วงเครือข่ายที่เครื่องนี้เชื่อมต่ออยู่ กดเพื่อใช้ได้ทันที")}</span>
     <div style="display:flex;flex-direction:column;gap:6px">${S.detected.map((d) => `<button type="button" class="opt" data-detected="${esc(d.cidr)}" ${d.ok ? "" : "disabled"} style="min-height:46px"><span style="flex:1;min-width:0"><span class="ot">${esc(d.cidr)}</span><span class="od">${esc(d.name)}</span></span><span class="badge ${d.ok ? "b-blue" : "b-grey"}">${d.ok ? `ใช้วงนี้ · ${num(d.hosts)}` : "นอกขอบเขต"}</span></button>`).join("")}</div></div>` : "";
@@ -1978,3 +1975,51 @@ function paintZTab() {
 }
 
 route();
+
+/* ── CSV Drag-and-Drop & Clean Download Delegation (csv-dropzone-dd) ── */
+document.addEventListener("change", (e) => {
+  if (e.target && e.target.id === "csv-smart-toggle") {
+    S.csvSmartFilter = !!e.target.checked;
+  }
+});
+document.addEventListener("click", (e) => {
+  if (e.target && e.target.closest && e.target.closest("[data-dl-clean-csv]")) {
+    e.preventDefault();
+    if (!S.csvTargets || !S.csvTargets.length) return;
+    const csvText = window.ThscanCsvImport && window.ThscanCsvImport.buildCleanCsvText
+      ? window.ThscanCsvImport.buildCleanCsvText(S.csvTargets, "ip")
+      : "\uFEFFip\r\n" + S.csvTargets.join("\r\n") + "\r\n";
+    const baseName = (S.csvFileName || "targets").replace(/\.csv$/i, "");
+    const outName = `${baseName}_ipv4_clean.csv`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csvText], { type: "text/csv;charset=utf-8" }));
+    a.download = outName;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    if (typeof toast === "function") toast(`ดาวน์โหลด ${outName} (${num(S.csvTargets.length)} IP) แล้ว`);
+  }
+});
+document.addEventListener("dragover", (e) => {
+  const dz = e.target && e.target.closest && e.target.closest("#csv-dropzone");
+  if (dz) { e.preventDefault(); dz.classList.add("dragover"); }
+});
+document.addEventListener("dragleave", (e) => {
+  const dz = e.target && e.target.closest && e.target.closest("#csv-dropzone");
+  if (dz && !dz.contains(e.relatedTarget)) dz.classList.remove("dragover");
+});
+document.addEventListener("drop", (e) => {
+  const dz = e.target && e.target.closest && e.target.closest("#csv-dropzone");
+  if (!dz) return;
+  e.preventDefault();
+  dz.classList.remove("dragover");
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  const inp = document.getElementById("ip-csv");
+  if (file && inp) {
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      inp.files = dt.files;
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch { /* fallback if DataTransfer unsupported */ }
+  }
+});
